@@ -3,7 +3,11 @@
 import { motion } from "framer-motion"
 import { MessageSquare } from "lucide-react"
 
-export function PhonePreview() {
+interface PhonePreviewProps {
+  onClick?: () => void
+}
+
+export function PhonePreview({ onClick }: PhonePreviewProps) {
   return (
     <motion.div
       className="relative max-w-[300px] w-full h-[600px] rounded-[3rem] border-8 border-gray-800 bg-gray-900 overflow-hidden cursor-pointer transform transition-transform duration-500 hover:scale-105"
@@ -11,6 +15,7 @@ export function PhonePreview() {
       initial={{ opacity: 0, scale: 0.9 }}
       whileInView={{ opacity: 1, scale: 1 }}
       viewport={{ once: true }}
+      onClick={onClick}
     >
       {/* Phone Notch */}
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-6 bg-gray-800 rounded-b-2xl z-20" />

@@ -1,12 +1,17 @@
 "use client"
 
+import { useState } from "react"
 import { motion } from "framer-motion"
 import { MessageSquare, Sparkles, Brain, Target, Star } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Dialog, DialogContent } from "@/components/ui/dialog"
 import { PhonePreview } from "@/components/phone-preview"
+import { ChatbotInterface } from "@/components/chatbot-interface"
 import Link from "next/link"
 
 export default function LandingPage() {
+  const [isChatOpen, setIsChatOpen] = useState(false)
+
   return (
     <div className="min-h-screen bg-black overflow-hidden">
       {/* Hero Section */}
@@ -161,6 +166,13 @@ export default function LandingPage() {
           </div>
         </div>
       </section>
+
+      {/* Chatbot Dialog */}
+      <Dialog open={isChatOpen} onOpenChange={setIsChatOpen}>
+        <DialogContent className="max-w-[400px] p-0 bg-transparent border-none">
+          <ChatbotInterface />
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
