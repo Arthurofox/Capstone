@@ -33,7 +33,6 @@ export function ChatbotInterface({ fullScreen = false }: ChatbotInterfaceProps) 
   }
 
   useEffect(() => {
-    // Initial messages
     const timer = setTimeout(() => {
       setMessages([
         {
@@ -64,9 +63,9 @@ export function ChatbotInterface({ fullScreen = false }: ChatbotInterfaceProps) 
 
   useEffect(() => {
     scrollToBottom()
-  }, [messages]) // Fixed dependency array
+  }, [messages])
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!input.trim()) return
 
     const newMessage: Message = {
@@ -75,74 +74,80 @@ export function ChatbotInterface({ fullScreen = false }: ChatbotInterfaceProps) 
       isUser: true,
     }
 
-    setMessages((prev) => [...prev, newMessage])
+    setMessages(prev => [...prev, newMessage])
     setInput("")
 
-    // Simulate AI response
-    setTimeout(() => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: (Date.now() + 1).toString(),
-          text: "I'd be happy to help! Let me analyze that for you...",
-          isUser: false,
+    try {
+      console.log('Sending message:', input)
+      const response = await fetch('http://localhost:8000/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
         },
-      ])
-    }, 1000)
+        body: JSON.stringify({ content: input }),
+      })
+
+      console.log('Response:', response)
+      const data = await response.json()
+      console.log('Data:', data)
+
+      setMessages(prev => [...prev, {
+        id: (Date.now() + 1).toString(),
+        text: data.content,
+        isUser: false,
+      }])
+    } catch (error) {
+      console.error('Error:', error)
+      toast.error("Failed to get response")
+    }
   }
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
 
-    // Check file type
-    const validTypes = [
-      "application/pdf",
-      "application/msword",
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ]
-    if (!validTypes.includes(file.type)) {
-      toast.error("Please upload a PDF or Word document")
-      return
-    }
-
-    // Check file size (max 5MB)
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error("File size should be less than 5MB")
-      return
-    }
-
+    console.log("File selected:", file.name)
     setIsUploading(true)
 
     try {
-      // Simulate file upload
-      await new Promise((resolve) => setTimeout(resolve, 1500))
+      const formData = new FormData()
+      formData.append('file', file)
+      console.log("Sending file to backend...")
 
-      const newMessage: Message = {
-        id: Date.now().toString(),
-        text: "I've uploaded my CV for review",
-        isUser: true,
-        attachment: {
-          name: file.name,
-          type: file.type,
-        },
+      const response = await fetch('http://localhost:8000/api/resume/upload', {
+        method: 'POST',
+        body: formData,
+      })
+
+      console.log("Response status:", response.status)
+      const data = await response.text()
+      console.log("Response data:", data)
+
+      if (!response.ok) {
+        throw new Error('Upload failed')
       }
 
-      setMessages((prev) => [...prev, newMessage])
+      const analysis = JSON.parse(data)
 
-      // Simulate AI response
-      setTimeout(() => {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: (Date.now() + 1).toString(),
-            text: "Thanks for sharing your CV! I'll analyze it and provide feedback on how you can improve it. Would you like me to:\n\n1️⃣ Suggest improvements\n2️⃣ Find matching job roles\n3️⃣ Highlight your key skills",
-            isUser: false,
-          },
-        ])
-      }, 1000)
+      setMessages(prev => [...prev,
+        {
+          id: Date.now().toString(),
+          text: "I've uploaded my CV for review",
+          isUser: true,
+          attachment: {
+            name: file.name,
+            type: file.type,
+          }
+        },
+        {
+          id: (Date.now() + 1).toString(),
+          text: `Here's my analysis:\n\n${analysis.summary}\n\nKey skills:\n${analysis.skills.join(', ')}\n\nRecommendations:\n${analysis.recommendations.join('\n')}`,
+          isUser: false,
+        }
+      ])
     } catch (error) {
-      toast.error("Failed to upload file. Please try again.")
+      console.error('Error:', error)
+      toast.error("Failed to upload file")
     } finally {
       setIsUploading(false)
     }
@@ -150,12 +155,10 @@ export function ChatbotInterface({ fullScreen = false }: ChatbotInterfaceProps) 
 
   return (
     <div className="relative h-full flex flex-col">
-      {/* Chat Header */}
       <div className="p-6 bg-gradient-to-r from-purple-900 to-purple-800">
         <h3 className="text-white font-bold text-2xl text-center tracking-tight">AI Career Buddy</h3>
       </div>
 
-      {/* Messages Area */}
       <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-gray-900">
         <AnimatePresence mode="popLayout">
           {messages.map((message) => (
@@ -188,7 +191,6 @@ export function ChatbotInterface({ fullScreen = false }: ChatbotInterfaceProps) 
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input Area */}
       <div className="p-3 border-t border-gray-800 bg-gray-900">
         <div className="flex gap-2">
           <Input
@@ -226,4 +228,3 @@ export function ChatbotInterface({ fullScreen = false }: ChatbotInterfaceProps) 
     </div>
   )
 }
-
