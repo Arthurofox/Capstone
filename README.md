@@ -33,3 +33,10 @@ make sure it's all installed
 
 uvicorn main:app --reload
 
+to start the dockerfile
+
+cd docker 
+
+(start running docker on the background)
+
+docker compose -f docker/docker-compose.yml up --build
