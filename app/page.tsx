@@ -1,212 +1,141 @@
-"use client"
+"use client";
 
-import { useState, useEffect } from "react"
-import { motion } from "framer-motion"
-import { MessageSquare, Sparkles, Brain, Target, Star } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent } from "@/components/ui/dialog"
-import { PhonePreview } from "@/components/phone-preview"
-import { ChatbotInterface } from "@/components/chatbot-interface"
-import Link from "next/link"
+import Link from "next/link";
+import Image from "next/image";
+import { Heart, Sun, Moon } from "lucide-react";
+import { useState, useEffect } from "react";
+import { ChatbotInterface } from "@/components/ui/chatbot-interface";
 
-export default function LandingPage() {
-  const [isChatOpen, setIsChatOpen] = useState(false)
-  const [dimensions, setDimensions] = useState({ width: 1000, height: 800 })
+export default function HomePage() {
+  const [theme, setTheme] = useState("light");
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    const updateDimensions = () => {
-      setDimensions({
-        width: window.innerWidth,
-        height: window.innerHeight
-      })
+    const savedTheme = localStorage.getItem("theme") || "light";
+    setTheme(savedTheme);
+    if (savedTheme === "dark") {
+      document.documentElement.classList.add("dark");
+    } else {
+      document.documentElement.classList.remove("dark");
     }
-    
-    updateDimensions()
-    window.addEventListener('resize', updateDimensions)
-    return () => window.removeEventListener('resize', updateDimensions)
-  }, [])
+    setMounted(true);
+  }, []);
+
+  const toggleTheme = () => {
+    const newTheme = theme === "light" ? "dark" : "light";
+    setTheme(newTheme);
+    localStorage.setItem("theme", newTheme);
+    if (newTheme === "dark") {
+      document.documentElement.classList.add("dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+    }
+  };
+
+  const pillStyle =
+    theme === "dark"
+      ? "rounded-full bg-indigo-900 bg-opacity-70 text-indigo-100 hover:bg-indigo-800 border border-indigo-700 transition-all"
+      : "rounded-full bg-yellow-100 bg-opacity-90 text-slate-800 hover:bg-yellow-200 border border-yellow-300 transition-all";
 
   return (
-    <div className="min-h-screen bg-black overflow-hidden">
-      {/* Hero Section */}
-      <section className="relative min-h-screen flex items-center justify-center px-4">
-        {/* Background Gradient */}
-        <div className="absolute inset-0 bg-gradient-to-br from-purple-900/20 via-pink-900/20 to-black" />
+    <>
+      {/* Dynamic Background */}
+      <div className="fixed inset-0 z-0">
+        {/* Day background */}
+        <Image
+          src="/background.png"
+          alt="Day background"
+          fill
+          priority
+          className="object-cover"
+          style={{
+            objectPosition: "60% center",
+            transition: "opacity 5s ease",
+            opacity: theme === "dark" ? 0 : 1,
+          }}
+        />
+        {/* Night background */}
+        <Image
+          src="/background_night.png"
+          alt="Night background"
+          fill
+          priority
+          className="object-cover absolute inset-0"
+          style={{
+            objectPosition: "60% center",
+            transition: "opacity 5s ease",
+            opacity: theme === "dark" ? 1 : 0,
+          }}
+        />
+        {/* Optional subtle overlay */}
+        <div
+          className="absolute inset-0"
+          style={{
+            backgroundColor: "rgba(37, 55, 90, 0.3)",
+            transition: "opacity 5s ease",
+            opacity: theme === "dark" ? 1 : 0,
+          }}
+        />
+      </div>
 
-        {/* Animated Background Elements */}
-        <div className="absolute inset-0 overflow-hidden">
-          {[...Array(20)].map((_, i) => (
-            <motion.div
-              key={i}
-              className="absolute h-px w-px bg-purple-400"
-              initial={{
-                x: Math.random() * dimensions.width,
-                y: Math.random() * dimensions.height,
-                scale: 0,
-              }}
-              animate={{
-                scale: [0, 1, 0],
-                opacity: [0, 1, 0],
-              }}
-              transition={{
-                duration: Math.random() * 3 + 2,
-                repeat: Number.POSITIVE_INFINITY,
-                repeatType: "reverse",
-              }}
-            />
-          ))}
-        </div>
-
-        <div className="relative z-10 text-center space-y-8 max-w-4xl mx-auto">
-          <motion.h1
-            className="text-5xl md:text-7xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-purple-400 via-pink-400 to-purple-400 tracking-tight"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.8 }}
-          >
-            Your AI Career Buddy
-          </motion.h1>
-
-          <motion.div
-            className="text-xl md:text-2xl text-white/80 relative"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.4, duration: 0.8 }}
-          >
-            <span className="relative">
-              <span className="absolute -inset-0.5 bg-gradient-to-r from-purple-500 via-pink-500 to-purple-500 opacity-20 blur-sm" />
-              <span className="relative">Navigate Your Career Path with AI-Powered Guidance</span>
+      {/* Landing Page Content */}
+      <div className="min-h-screen flex flex-col theme-transition relative z-10">
+        {/* Navigation */}
+        <nav className="w-full py-4 px-6 flex justify-between items-center bg-black/10 backdrop-blur-soft">
+          <Link href="/" className="flex items-center space-x-2">
+            <Heart className="h-6 w-6 text-yellow-500" fill="#FFD700" />
+            <span className="text-2xl font-semibold text-white drop-shadow-md">
+              PathFinder
             </span>
-          </motion.div>
-
-          <motion.p
-            className="text-gray-400 text-lg max-w-2xl mx-auto"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.6, duration: 0.8 }}
-          >
-            Get personalized career advice, resume optimization, and job recommendations tailored to your skills and
-            aspirations
-          </motion.p>
-        </div>
-
-        {/* Scroll Indicator */}
-        <motion.div
-          className="absolute bottom-8 left-1/2 -translate-x-1/2"
-          animate={{ y: [0, 10, 0] }}
-          transition={{ duration: 2, repeat: Number.POSITIVE_INFINITY }}
-        >
-          <Sparkles className="w-6 h-6 text-pink-400" />
-        </motion.div>
-      </section>
-
-      {/* Features Section */}
-      <section className="py-20 px-4">
-        <div className="max-w-6xl mx-auto">
-          <motion.h2
-            className="text-3xl md:text-4xl font-bold text-center text-white mb-16"
-            initial={{ opacity: 0 }}
-            whileInView={{ opacity: 1 }}
-            viewport={{ once: true }}
-          >
-            Your Personal Career Assistant
-          </motion.h2>
-
-          <div className="grid md:grid-cols-3 gap-8">
-            {features.map((feature, index) => (
-              <motion.div
-                key={feature.title}
-                className="relative group"
-                initial={{ opacity: 0, y: 20 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.2 }}
-                viewport={{ once: true }}
+          </Link>
+          <div className="flex items-center space-x-3">
+            {mounted && (
+              <button
+                onClick={toggleTheme}
+                className="p-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors"
+                aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
               >
-                <div className="absolute -inset-0.5 bg-gradient-to-r from-purple-600 to-pink-600 rounded-lg blur opacity-30 group-hover:opacity-100 transition duration-1000"></div>
-                <div className="relative bg-gray-900 p-6 rounded-lg">
-                  <feature.icon className="w-12 h-12 text-purple-400 mb-4" />
-                  <h3 className="text-xl font-bold text-white mb-2">{feature.title}</h3>
-                  <p className="text-gray-400">{feature.description}</p>
-                </div>
-              </motion.div>
-            ))}
+                {theme === "dark" ? (
+                  <Sun className="h-5 w-5 text-yellow-200" />
+                ) : (
+                  <Moon className="h-5 w-5 text-slate-700" />
+                )}
+              </button>
+            )}
+            <a
+              href="/signin"
+              className="px-4 py-2 text-sm bg-transparent border border-white text-white rounded-full hover:bg-white/20 transition-colors"
+            >
+              Sign in
+            </a>
+            <a
+              href="/signup"
+              className="px-4 py-2 text-sm bg-white text-slate-800 rounded-full hover:bg-white/90 transition-colors"
+            >
+              Sign up
+            </a>
           </div>
-        </div>
-      </section>
+        </nav>
 
-      {/* CTA Section with Phone Preview */}
-      <section className="relative py-20 px-4">
-        <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center gap-12">
-          <div className="flex-1 space-y-6">
-            <motion.h2
-              className="text-3xl md:text-4xl font-bold text-white"
-              initial={{ opacity: 0, x: -20 }}
-              whileInView={{ opacity: 1, x: 0 }}
-              viewport={{ once: true }}
-            >
-              Ready to Start Your Journey?
-            </motion.h2>
-            <motion.p
-              className="text-gray-400 text-lg"
-              initial={{ opacity: 0, x: -20 }}
-              whileInView={{ opacity: 1, x: 0 }}
-              viewport={{ once: true }}
-              transition={{ delay: 0.2 }}
-            >
-              Click on the phone to start chatting with your AI Career Buddy. Get instant answers to your career
-              questions and personalized guidance for your professional growth.
-            </motion.p>
-            <motion.div
-              initial={{ opacity: 0, x: -20 }}
-              whileInView={{ opacity: 1, x: 0 }}
-              viewport={{ once: true }}
-              transition={{ delay: 0.4 }}
-            >
-              <Link href="/chat">
-                <Button className="relative group px-8 py-6 text-lg rounded-full bg-gradient-to-r from-purple-600 via-pink-600 to-purple-600 hover:from-purple-500 hover:via-pink-500 hover:to-purple-500 text-white shadow-lg transition-all duration-300">
-                  <span className="absolute -inset-1 bg-gradient-to-r from-purple-500 via-pink-500 to-purple-500 opacity-40 group-hover:opacity-60 blur-lg transition-all duration-300" />
-                  <span className="relative flex items-center gap-2">
-                    Start Chatting <MessageSquare className="w-5 h-5" />
-                  </span>
-                </Button>
-              </Link>
-            </motion.div>
+        {/* Main Landing Content */}
+        <main className="flex-1 flex flex-col items-center justify-center px-4 pt-6 pb-16">
+          <div className="text-center mb-8">
+            <h1 className="text-5xl md:text-7xl font-bold text-white drop-shadow-lg mb-4">
+              Career advice in seconds.
+            </h1>
+            <p className="text-xl md:text-2xl text-white drop-shadow-md max-w-2xl mx-auto">
+              PathFinder is your AI career advisor for every step of your journey.
+            </p>
           </div>
 
-          <div className="flex-1 flex justify-center">
-            <Link href="/chat">
-              <PhonePreview />
-            </Link>
+          {/* ChatbotInterface rendered inline so it scrolls with the page */}
+          <div className="w-full flex items-center justify-center my-8">
+            <ChatbotInterface />
           </div>
-        </div>
-      </section>
 
-      {/* Chatbot Dialog */}
-      <Dialog open={isChatOpen} onOpenChange={setIsChatOpen}>
-        <DialogContent className="max-w-[400px] p-0 bg-transparent border-none">
-          <ChatbotInterface />
-        </DialogContent>
-      </Dialog>
-    </div>
-  )
+          {/* Additional landing page elements can be placed here */}
+        </main>
+      </div>
+    </>
+  );
 }
-
-const features = [
-  {
-    icon: Brain,
-    title: "Smart Career Analysis",
-    description:
-      "Get AI-powered insights about your career path and potential opportunities based on your skills and experience.",
-  },
-  {
-    icon: Target,
-    title: "Personalized Advice",
-    description:
-      "Receive tailored recommendations for skill development, job roles, and career advancement strategies.",
-  },
-  {
-    icon: Star,
-    title: "Resume Enhancement",
-    description: "Get expert suggestions to optimize your resume and make it stand out to potential employers.",
-  },
-]
