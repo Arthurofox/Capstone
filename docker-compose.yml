@@ -1,13 +1,14 @@
-# docker/docker-compose.yml
+version: '3.8'
+
 services:
   frontend:
     build: 
-      context: ..
-      dockerfile: docker/frontend.Dockerfile
+      context: .
+      dockerfile: ./docker/frontend.Dockerfile
     ports:
       - "3000:3000"
     volumes:
-      - ..:/app
+      - .:/app
       - /app/node_modules
       - /app/.next
     environment:
@@ -16,12 +17,11 @@ services:
 
   backend:
     build:
-      # Changed context to point directly to backend folder
-      context: ../backend
+      context: ./backend
       dockerfile: ../docker/backend.Dockerfile
     ports:
       - "8000:8000"
     volumes:
-      - ../backend:/app
+      - ./backend:/app
     env_file:
-      - ../backend/.env
+      - ./backend/.env

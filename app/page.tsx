@@ -4,11 +4,13 @@ import Link from "next/link";
 import Image from "next/image";
 import { Heart, Sun, Moon } from "lucide-react";
 import { useState, useEffect } from "react";
+import { motion } from "framer-motion";
 import { ChatbotInterface } from "@/components/ui/chatbot-interface";
 
 export default function HomePage() {
   const [theme, setTheme] = useState("light");
   const [mounted, setMounted] = useState(false);
+  const [chatExpanded, setChatExpanded] = useState(false);
 
   useEffect(() => {
     const savedTheme = localStorage.getItem("theme") || "light";
@@ -31,11 +33,6 @@ export default function HomePage() {
       document.documentElement.classList.remove("dark");
     }
   };
-
-  const pillStyle =
-    theme === "dark"
-      ? "rounded-full bg-indigo-900 bg-opacity-70 text-indigo-100 hover:bg-indigo-800 border border-indigo-700 transition-all"
-      : "rounded-full bg-yellow-100 bg-opacity-90 text-slate-800 hover:bg-yellow-200 border border-yellow-300 transition-all";
 
   return (
     <>
@@ -93,7 +90,9 @@ export default function HomePage() {
               <button
                 onClick={toggleTheme}
                 className="p-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors"
-                aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+                aria-label={
+                  theme === "dark" ? "Switch to light mode" : "Switch to dark mode"
+                }
               >
                 {theme === "dark" ? (
                   <Sun className="h-5 w-5 text-yellow-200" />
@@ -118,22 +117,38 @@ export default function HomePage() {
         </nav>
 
         {/* Main Landing Content */}
-        <main className="flex-1 flex flex-col items-center justify-center px-4 pt-6 pb-16">
-          <div className="text-center mb-8">
+        {/*
+          Removed the previous flex "justify-center" so content stays higher.
+          Adjust padding as needed:
+          - pt-6 controls top spacing
+          - pb-8 controls bottom spacing
+        */}
+        <main className="pt-6 px-4 pb-8">
+          {/* Headline Text that fades when chat expands */}
+          <motion.div
+            className="text-center mb-8"
+            initial={{ opacity: 1 }}
+            animate={{
+              opacity: chatExpanded ? 0 : 1,
+              y: chatExpanded ? -20 : 0,
+            }}
+            transition={{
+              opacity: { duration: 0.7, ease: "easeOut" },
+              y: { duration: 0.5, ease: "easeOut" },
+            }}
+          >
             <h1 className="text-5xl md:text-7xl font-bold text-white drop-shadow-lg mb-4">
               Career advice in seconds.
             </h1>
             <p className="text-xl md:text-2xl text-white drop-shadow-md max-w-2xl mx-auto">
               PathFinder is your AI career advisor for every step of your journey.
             </p>
-          </div>
+          </motion.div>
 
-          {/* ChatbotInterface rendered inline so it scrolls with the page */}
-          <div className="w-full flex items-center justify-center my-8">
-            <ChatbotInterface />
+          {/* ChatbotInterface */}
+          <div className="flex items-center justify-center">
+            <ChatbotInterface onExpandChange={setChatExpanded} />
           </div>
-
-          {/* Additional landing page elements can be placed here */}
         </main>
       </div>
     </>

@@ -22,7 +22,6 @@ export default function RootLayout({
           <main className="flex-grow z-10 relative">
             {children}
           </main>
-          <Footer />
         </div>
       </body>
     </html>
