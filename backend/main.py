@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from app.resume_processor import ResumeProcessor
 from app.rag_system import JobOfferRAG
 from app.prompt_handler import CareerAssistantPromptHandler
+from app.formatters import format_job_results_html
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -109,9 +110,9 @@ def format_job_results(results):
             continue
             
         # Extract job information using regex
-        title_match = re.search(r"Title:\s*(.+?)(?:\n|$)", content)
-        company_match = re.search(r"Company:\s*(.+?)(?:\n|$)", content)
-        location_match = re.search(r"Location:\s*(.+?)(?:\n|$)", content)
+        title_match = re.search(r"Title:\s(.+?)(?:\n|$)", content)
+        company_match = re.search(r"Company:\s(.+?)(?:\n|$)", content)
+        location_match = re.search(r"Location:\s(.+?)(?:\n|$)", content)
         
         # Get values from matches or metadata
         title = title_match.group(1).strip() if title_match else result.get("metadata", {}).get("title", "")
@@ -130,7 +131,7 @@ def format_job_results(results):
             continue
             
         # Build response
-        response += f"**{i}. {title}**\n"
+        response += f"{i}. {title}\n"
         
         if company and company != "N/A" and company != "":
             response += f"Company: {company}\n"
@@ -166,7 +167,9 @@ async def chat(message: ChatMessage):
         
         # Check if the message is asking for job recommendations
         job_phrases = ["job", "career", "position", "opening", "opportunity", "employment",
-                      "hiring", "work", "vacancy", "recommend", "recommendation"]
+               "hiring", "work", "vacancy", "recommend", "recommendation", 
+               "internship", "intern", "trainee", "stage"]
+
         
         is_job_request = any(phrase in message.content.lower() for phrase in job_phrases)
         
@@ -180,7 +183,7 @@ async def chat(message: ChatMessage):
                 
                 if results:
                     # Format the results into a nice response
-                    response_content = format_job_results(results)
+                    response_content = format_job_results_html(results, llm)
                 else:
                     # No results found, fall back to the general response
                     response_content = await prompt_handler.generate_response(
