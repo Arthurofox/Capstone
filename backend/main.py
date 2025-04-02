@@ -368,46 +368,106 @@ async def health_check():
 
 @app.websocket("/ws/voice")
 async def voice_websocket_endpoint(websocket: WebSocket):
+    logger.info("WebSocket connection attempt received")
     await websocket.accept()
+    logger.info("WebSocket connection accepted")
     
-    # Create an asyncio queue for messages from the voice agent
+    # Create a message queue for communication between threads
     message_queue = asyncio.Queue()
     
-    # Callback to forward messages from VoiceAgent to the asyncio queue
-    def voice_agent_callback(message):
-        loop = asyncio.get_event_loop()
-        asyncio.run_coroutine_threadsafe(message_queue.put(message), loop)
+    # Create a ready event to know when the agent is connected
+    agent_ready = threading.Event()
     
-    # Instantiate and connect the voice agent
+    def voice_agent_callback(message):
+        try:
+            loop = asyncio.get_running_loop()
+            asyncio.run_coroutine_threadsafe(message_queue.put(message), loop)
+        except Exception as e:
+            logger.error(f"Error in callback: {e}")
+    
+    # Initialize the voice agent
     agent = VoiceAgent()
     agent.set_on_message_callback(voice_agent_callback)
+    
+    # Set up a callback to know when the agent is connected
+    def on_connect_callback():
+        agent_ready.set()
+    
+    agent.set_on_connect_callback(on_connect_callback)
     agent.connect()
     
-    # Optionally, send an initial session update
-    agent.send_text(
-        "You are Sophia, a career assistant specializing in interview preparation. "
-        "Provide real-time, actionable feedback as the user practices interview responses."
-    )
+    # Wait for the agent to be connected before sending the initial text
+    async def wait_for_agent_and_initialize():
+        # Wait for agent to be ready (with timeout)
+        for _ in range(20):  # 10 second timeout
+            if agent_ready.is_set():
+                break
+            await asyncio.sleep(0.5)
+        
+        if agent_ready.is_set():
+            agent.send_text(
+                "You are Sophia, a career assistant specializing in interview preparation. "
+                "Provide real-time, actionable feedback as the user practices interview responses."
+            )
+            logger.info("Sent initial instructions to OpenAI")
+        else:
+            logger.error("Timed out waiting for agent to connect")
+    
+    # Start initialization task
+    init_task = asyncio.create_task(wait_for_agent_and_initialize())
+    
+    # Task to process messages from the agent and send to frontend
+    async def process_agent_messages():
+        while True:
+            try:
+                agent_message = await message_queue.get()
+                logger.info(f"Received message from agent, type: {type(agent_message)}")
+                
+                if isinstance(agent_message, bytes):
+                    logger.info(f"Sending audio bytes to frontend, length: {len(agent_message)}")
+                    await websocket.send_bytes(agent_message)
+                else:
+                    logger.info(f"Sending JSON to frontend: {json.dumps(agent_message)[:100]}...")
+                    await websocket.send_text(json.dumps(agent_message))
+            except Exception as e:
+                logger.error(f"Error processing agent message: {e}")
+                break
+    
+    # Start the agent message processor
+    agent_task = asyncio.create_task(process_agent_messages())
     
     try:
         while True:
             # Receive messages from the frontend
-            data = await websocket.receive_text()
-            message = json.loads(data)
-            if message.get("type") == "text":
-                agent.send_text(message.get("content"))
-            elif message.get("type") == "audio":
-                # Assume audio is base64 encoded
-                audio_bytes = base64.b64decode(message.get("content"))
-                agent.send_audio(audio_bytes)
-            
-            # Forward any messages from the voice agent back to the frontend
-            while not message_queue.empty():
-                agent_message = await message_queue.get()
-                await websocket.send_text(json.dumps(agent_message))
+            msg = await websocket.receive()
+            if msg["type"] == "websocket.disconnect":
+                logger.info("Received disconnect message")
+                break
+            elif msg["type"] == "websocket.receive":
+                if "bytes" in msg:
+                    audio_bytes = msg["bytes"]
+                    logger.info(f"Received audio from frontend, length: {len(audio_bytes)}")
+                    agent.send_audio(audio_bytes)
+                elif "text" in msg:
+                    try:
+                        data = msg["text"]
+                        message = json.loads(data)
+                        logger.info(f"Received text message: {data[:100]}...")
+                        if message.get("type") == "text":
+                            # Handle text messages
+                            pass
+                    except json.JSONDecodeError:
+                        logger.warning(f"Received invalid JSON: {data[:100]}...")
     except WebSocketDisconnect:
+        logger.info("WebSocket disconnected")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+    finally:
+        # Clean up
+        init_task.cancel()
+        agent_task.cancel()
         agent.stop()
-
+        logger.info("Websocket connection closed, agent stopped")
 
 # Initialize on startup
 @app.on_event("startup")
