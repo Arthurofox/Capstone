@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -11,6 +11,8 @@ import asyncio
 import sys
 import pinecone
 import re
+import base64
+
 
 # Add the current directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -21,6 +23,7 @@ from app.resume_processor import ResumeProcessor
 from app.rag_system import JobOfferRAG
 from app.prompt_handler import CareerAssistantPromptHandler
 from app.formatters import format_job_results_html
+from app.voice_agent import VoiceAgent
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -360,6 +363,51 @@ async def match_resume_to_job(request: ResumeJobMatchRequest):
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+## Voice endpoint
+
+@app.websocket("/ws/voice")
+async def voice_websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    
+    # Create an asyncio queue for messages from the voice agent
+    message_queue = asyncio.Queue()
+    
+    # Callback to forward messages from VoiceAgent to the asyncio queue
+    def voice_agent_callback(message):
+        loop = asyncio.get_event_loop()
+        asyncio.run_coroutine_threadsafe(message_queue.put(message), loop)
+    
+    # Instantiate and connect the voice agent
+    agent = VoiceAgent()
+    agent.set_on_message_callback(voice_agent_callback)
+    agent.connect()
+    
+    # Optionally, send an initial session update
+    agent.send_text(
+        "You are Sophia, a career assistant specializing in interview preparation. "
+        "Provide real-time, actionable feedback as the user practices interview responses."
+    )
+    
+    try:
+        while True:
+            # Receive messages from the frontend
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            if message.get("type") == "text":
+                agent.send_text(message.get("content"))
+            elif message.get("type") == "audio":
+                # Assume audio is base64 encoded
+                audio_bytes = base64.b64decode(message.get("content"))
+                agent.send_audio(audio_bytes)
+            
+            # Forward any messages from the voice agent back to the frontend
+            while not message_queue.empty():
+                agent_message = await message_queue.get()
+                await websocket.send_text(json.dumps(agent_message))
+    except WebSocketDisconnect:
+        agent.stop()
+
 
 # Initialize on startup
 @app.on_event("startup")

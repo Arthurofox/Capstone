@@ -113,6 +113,13 @@ export default function HomePage() {
             >
               Sign up
             </a>
+            {/* New Voice Chat Link */}
+            <Link
+              href="/voice"
+              className="px-4 py-2 text-sm bg-transparent border border-white text-white rounded-full hover:bg-white/20 transition-colors"
+            >
+              Voice Chat
+            </Link>
           </div>
         </nav>
 
