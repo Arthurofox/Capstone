@@ -22,30 +22,29 @@ llm = ChatOpenAI(
 class CareerAssistantPromptHandler:
     """
     Handles prompt construction and management for the career assistant
+    using a complete XML structure.
     """
     
     def __init__(self, prompt_xml_path: str):
         """
-        Initialize the prompt handler with XML prompt file
+        Initialize the prompt handler with an XML prompt file.
         
         Args:
-            prompt_xml_path: Path to the XML prompt file
+            prompt_xml_path: Path to the XML prompt file.
         """
         self.prompt_xml_path = prompt_xml_path
         self.prompt_content = self._load_xml_prompt()
         
     def _load_xml_prompt(self) -> Dict[str, Any]:
         """
-        Load and parse the XML prompt file
+        Load and parse the XML prompt file.
         
         Returns:
-            Dictionary containing parsed XML content
+            Dictionary containing the parsed XML content.
         """
         try:
             tree = ET.parse(self.prompt_xml_path)
             root = tree.getroot()
-            
-            # Parse the XML into a structured dictionary
             prompt_dict = self._parse_xml_element(root)
             return prompt_dict
         except Exception as e:
@@ -54,14 +53,15 @@ class CareerAssistantPromptHandler:
     
     def _parse_xml_element(self, element) -> Any:
         """
-        Recursively parse XML element into Python data structure
+        Recursively parse an XML element into a Python data structure.
         
         Args:
-            element: XML element to parse
+            element: XML element to parse.
             
         Returns:
-            Parsed data structure (dict, list, or string)
+            Parsed data structure (string, dict, or list).
         """
+        # Base case: if no children, return text content
         if len(element) == 0:
             return element.text.strip() if element.text else ""
         
@@ -69,59 +69,124 @@ class CareerAssistantPromptHandler:
         for child in element:
             child_tag = child.tag
             child_result = self._parse_xml_element(child)
-            
+            # Handle multiple children with the same tag
             if child_tag in result:
                 if not isinstance(result[child_tag], list):
                     result[child_tag] = [result[child_tag]]
                 result[child_tag].append(child_result)
             else:
                 result[child_tag] = child_result
-                
         return result
-    
+
     def create_system_prompt(self) -> str:
         """
-        Create system prompt from XML content
+        Create a system prompt string by incorporating all sections of the XML.
         
         Returns:
-            Formatted system prompt string
+            A comprehensive system prompt string.
         """
         if not self.prompt_content:
             return "You are a helpful career assistant named Sophia."
         
-        # Extract key sections for the system prompt
+        prompt_lines = []
+        
+        # Identity Section
         identity = self.prompt_content.get('Identity', {})
-        name = identity.get('n', 'Sophia')
+        name = identity.get('Name', 'Sophia')
         role = identity.get('Role', 'Career Guidance Professional')
+        prompt_lines.append("Identity:")
+        prompt_lines.append(f"  Name: {name}")
+        prompt_lines.append(f"  Role: {role}")
+        
+        # Background within Identity
+        background = identity.get('Background', {})
+        if background:
+            prompt_lines.append("  Background:")
+            for key, value in background.items():
+                prompt_lines.append(f"    {key}: {value}")
+                
+        # Personality within Identity
         personality = identity.get('Personality', {})
-        traits = personality.get('Traits', '')
+        if personality:
+            prompt_lines.append("  Personality:")
+            for key, value in personality.items():
+                prompt_lines.append(f"    {key}: {value}")
         
-        # Construct the system prompt
-        system_prompt = f"""You are {name}, a {role} with the following personality traits: {traits}.
-
-            CAREER ASSISTANT GUIDELINES:
-            1. Your purpose is to help students with career planning, job searching, resume review, and interview preparation.
-            2. You should be warm, professional, and empathetic in your responses.
-            3. Provide practical, actionable advice tailored to the student's situation.
-            4. Ask probing questions to understand their needs, goals, and concerns.
-            5. When appropriate, suggest interview practice without being asked.
-            6. Connect career choices to deeper values and aspirations.
-            7. Stay aware of modern workplace trends and emerging industries.
-            8. Respect boundaries and redirect inappropriate requests.
-            9. You cannot access real-time job listings or guarantee employment outcomes.
-            10. You cannot provide specialized legal or mental health support.
-
-            Be proactive in guiding the conversation, but responsive to the student's needs.
-            """
+        # Interaction Guidelines Section
+        interaction = self.prompt_content.get('InteractionGuidelines', {})
+        if interaction:
+            prompt_lines.append("\nInteraction Guidelines:")
+            for key, value in interaction.items():
+                prompt_lines.append(f"  {key}: {value}")
         
-        return system_prompt
+        # Expertise Areas Section
+        expertise = self.prompt_content.get('ExpertiseAreas', {})
+        if expertise:
+            prompt_lines.append("\nExpertise Areas:")
+            for area, content in expertise.items():
+                prompt_lines.append(f"  {area}:")
+                if isinstance(content, dict):
+                    for key, value in content.items():
+                        if isinstance(value, list):
+                            prompt_lines.append(f"    {key}:")
+                            for item in value:
+                                prompt_lines.append(f"      - {item}")
+                        else:
+                            prompt_lines.append(f"    {key}: {value}")
+                else:
+                    prompt_lines.append(f"    {content}")
+        
+        # Responsible AI Boundaries Section
+        boundaries = self.prompt_content.get('ResponsibleAIBoundaries', {})
+        if boundaries:
+            prompt_lines.append("\nResponsible AI Boundaries:")
+            for key, value in boundaries.items():
+                prompt_lines.append(f"  {key}: {value}")
+        
+        # Career Context Awareness Section
+        context = self.prompt_content.get('CareerContextAwareness', {})
+        if context:
+            prompt_lines.append("\nCareer Context Awareness:")
+            for key, value in context.items():
+                if isinstance(value, list):
+                    prompt_lines.append(f"  {key}:")
+                    for item in value:
+                        prompt_lines.append(f"    - {item}")
+                else:
+                    prompt_lines.append(f"  {key}: {value}")
+        
+        # Proactive Advising Section
+        advising = self.prompt_content.get('ProactiveAdvising', {})
+        if advising:
+            prompt_lines.append("\nProactive Advising:")
+            for key, value in advising.items():
+                prompt_lines.append(f"  {key}: {value}")
+        
+        # Standard Career Assistant Guidelines
+        prompt_lines.append("\nCareer Assistant Guidelines:")
+        guidelines = [
+            "Your purpose is to help students with career planning, job searching, resume review, and interview preparation.",
+            "Be warm, professional, and empathetic.",
+            "Provide practical, actionable advice tailored to the student's situation.",
+            "Ask probing questions to understand their needs, goals, and concerns.",
+            "Suggest interview practice when appropriate.",
+            "Connect career choices to deeper values and aspirations.",
+            "Stay aware of modern workplace trends and emerging industries.",
+            "Respect boundaries and redirect inappropriate requests.",
+            "You cannot access real-time job listings or guarantee employment outcomes.",
+            "You cannot provide specialized legal or mental health support."
+        ]
+        for guideline in guidelines:
+            prompt_lines.append(f"  - {guideline}")
+        
+        return "\n".join(prompt_lines)
     
     def create_langchain_prompt(self) -> ChatPromptTemplate:
         """
-        Create LangChain prompt template for chat interface
+        Create a LangChain prompt template using the comprehensive system prompt.
         
         Returns:
-            LangChain ChatPromptTemplate
+            A LangChain ChatPromptTemplate.
         """
         system_template = self.create_system_prompt()
         system_message_prompt = SystemMessagePromptTemplate.from_template(system_template)
@@ -138,20 +203,19 @@ class CareerAssistantPromptHandler:
     
     async def generate_response(self, user_input: str, chat_history: Optional[List[Dict[str, str]]] = None) -> str:
         """
-        Generate a response from the career assistant
+        Generate a response from the career assistant.
         
         Args:
-            user_input: User's message
-            chat_history: Optional chat history
+            user_input: The user's input message.
+            chat_history: Optional list of previous chat messages.
             
         Returns:
-            Assistant's response
+            The assistant's response.
         """
         try:
-            # Prepare LangChain message format
+            # Prepare messages for LangChain
             messages = [SystemMessage(content=self.create_system_prompt())]
             
-            # Add chat history if provided
             if chat_history:
                 for message in chat_history:
                     if message["role"] == "user":
@@ -159,14 +223,16 @@ class CareerAssistantPromptHandler:
                     elif message["role"] == "assistant":
                         messages.append(SystemMessage(content=message["content"]))
             
-            # Add user's message
             messages.append(HumanMessage(content=user_input))
             
-            # Generate response using LangChain ChatOpenAI
             response = await llm.ainvoke(messages)
-            
             return response.content
         
         except Exception as e:
             print(f"Error generating response: {str(e)}")
-            return f"I apologize, but I encountered an error. Please try again later."
+            return "I encountered an error. Please try again later."
+
+# For testing purposes, you can run this module directly:
+if __name__ == "__main__":
+    handler = CareerAssistantPromptHandler(prompt_xml_path="app/prompts/career_assistant_prompt.xml")
+    print(handler.create_system_prompt())
