@@ -10,8 +10,8 @@ import logging
 import asyncio
 import sys
 import pinecone
-import re
-import base64
+import re, time
+import base64, threading
 
 
 # Add the current directory to path
@@ -365,6 +365,7 @@ async def health_check():
     return {"status": "healthy"}
 
 ## Voice endpoint
+logger = logging.getLogger(__name__)
 
 @app.websocket("/ws/voice")
 async def voice_websocket_endpoint(websocket: WebSocket):
@@ -378,38 +379,80 @@ async def voice_websocket_endpoint(websocket: WebSocket):
     # Create a ready event to know when the agent is connected
     agent_ready = threading.Event()
     
+    # Capture the current event loop
+    current_loop = asyncio.get_running_loop()
+    
     def voice_agent_callback(message):
+        """Callback to handle messages from the VoiceAgent"""
         try:
-            loop = asyncio.get_running_loop()
-            asyncio.run_coroutine_threadsafe(message_queue.put(message), loop)
+            # Use the captured event loop with a proper future
+            future = asyncio.run_coroutine_threadsafe(
+                message_queue.put(message), 
+                current_loop
+            )
+            # Wait for the result with a timeout to ensure it completes
+            try:
+                future.result(timeout=1)
+            except Exception as e:
+                logger.error(f"Error in message queue future: {e}")
         except Exception as e:
-            logger.error(f"Error in callback: {e}")
+            logger.error(f"Error in voice agent callback: {e}")
     
     # Initialize the voice agent
     agent = VoiceAgent()
     agent.set_on_message_callback(voice_agent_callback)
     
-    # Set up a callback to know when the agent is connected
+    # Define a callback for when the agent connects
     def on_connect_callback():
+        """Called when the agent successfully connects to OpenAI"""
+        logger.info("Agent connected to OpenAI API")
         agent_ready.set()
     
+    # Set up the connect callback
     agent.set_on_connect_callback(on_connect_callback)
     agent.connect()
     
-    # Wait for the agent to be connected before sending the initial text
+    # Wait for agent to connect and then send initial instructions
     async def wait_for_agent_and_initialize():
         # Wait for agent to be ready (with timeout)
-        for _ in range(20):  # 10 second timeout
-            if agent_ready.is_set():
+        for _ in range(20):  # 10 second timeout (20 * 0.5s)
+            if agent_ready.is_set() or agent.connected:
                 break
             await asyncio.sleep(0.5)
+            logger.info("Waiting for agent to connect...")
         
-        if agent_ready.is_set():
-            agent.send_text(
+        if agent_ready.is_set() or agent.connected:
+            # Send our instructions to the agent
+            initial_prompt = (
                 "You are Sophia, a career assistant specializing in interview preparation. "
-                "Provide real-time, actionable feedback as the user practices interview responses."
+                "Provide real-time, actionable feedback as the user practices interview responses. "
+                "Keep your responses concise and focused on helping the user improve."
             )
+            agent.send_text(initial_prompt)
             logger.info("Sent initial instructions to OpenAI")
+            
+            # Wait a moment for the instructions to be processed
+            await asyncio.sleep(2)
+            
+            # Update VAD settings to make it more sensitive
+            try:
+                vad_settings = json.dumps({
+                    "type": "session.update",
+                    "session": {
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "threshold": 0.3,  # Lower threshold for easier activation
+                            "prefix_padding_ms": 300,
+                            "silence_duration_ms": 500,  # Longer silence for easier detection
+                            "create_response": True,
+                            "interrupt_response": True
+                        }
+                    }
+                })
+                agent.ws_app.send(vad_settings)
+                logger.info("Updated VAD settings for better voice detection")
+            except Exception as e:
+                logger.error(f"Error updating VAD settings: {e}")
         else:
             logger.error("Timed out waiting for agent to connect")
     
@@ -418,56 +461,121 @@ async def voice_websocket_endpoint(websocket: WebSocket):
     
     # Task to process messages from the agent and send to frontend
     async def process_agent_messages():
+        """Process messages from the agent and forward them to the frontend"""
         while True:
             try:
+                # Wait for a message from the queue
                 agent_message = await message_queue.get()
-                logger.info(f"Received message from agent, type: {type(agent_message)}")
                 
+                # Log message type
                 if isinstance(agent_message, bytes):
-                    logger.info(f"Sending audio bytes to frontend, length: {len(agent_message)}")
+                    logger.info(f"Forwarding audio data to frontend, size: {len(agent_message)} bytes")
                     await websocket.send_bytes(agent_message)
                 else:
-                    logger.info(f"Sending JSON to frontend: {json.dumps(agent_message)[:100]}...")
+                    # For JSON data, log a snippet
+                    message_preview = str(agent_message)[:100] + "..." if len(str(agent_message)) > 100 else str(agent_message)
+                    logger.info(f"Forwarding JSON to frontend: {message_preview}")
                     await websocket.send_text(json.dumps(agent_message))
+                
+                # Mark this task as done
+                message_queue.task_done()
             except Exception as e:
                 logger.error(f"Error processing agent message: {e}")
-                break
+                await asyncio.sleep(0.1)  # Avoid tight loop on errors
     
     # Start the agent message processor
     agent_task = asyncio.create_task(process_agent_messages())
     
+    # Counters for audio tracking
+    audio_chunk_count = 0
+    audio_byte_count = 0
+    last_log_time = time.time()
+    
     try:
         while True:
             # Receive messages from the frontend
-            msg = await websocket.receive()
+            try:
+                msg = await asyncio.wait_for(websocket.receive(), timeout=30)
+            except asyncio.TimeoutError:
+                # Log periodic heartbeat to show the connection is still alive
+                logger.info("No messages received in the last 30 seconds")
+                continue
+                
             if msg["type"] == "websocket.disconnect":
                 logger.info("Received disconnect message")
                 break
+                
             elif msg["type"] == "websocket.receive":
                 if "bytes" in msg:
                     audio_bytes = msg["bytes"]
-                    logger.info(f"Received audio from frontend, length: {len(audio_bytes)}")
+                    audio_chunk_count += 1
+                    audio_byte_count += len(audio_bytes)
+                    
+                    # Log every second to avoid flooding logs
+                    current_time = time.time()
+                    if current_time - last_log_time > 1:
+                        logger.info(f"Received {audio_chunk_count} audio chunks totaling {audio_byte_count} bytes in the last second")
+                        audio_chunk_count = 0
+                        audio_byte_count = 0
+                        last_log_time = current_time
+                    
+                    # Always forward audio to OpenAI
                     agent.send_audio(audio_bytes)
+                    
                 elif "text" in msg:
                     try:
                         data = msg["text"]
                         message = json.loads(data)
-                        logger.info(f"Received text message: {data[:100]}...")
+                        logger.info(f"Received text message from frontend: {data[:100]}...")
+                        
+                        # Handle text commands
                         if message.get("type") == "text":
-                            # Handle text messages
-                            pass
+                            text_content = message.get("content", "")
+                            logger.info(f"Received text command: {text_content}")
+                            
+                            # Send the user text to OpenAI - FIXED: properly format the message
+                            try:
+                                # Create a conversation item with proper formatting
+                                conversation_message = json.dumps({
+                                    "type": "conversation.item.create",
+                                    "item": {
+                                        "type": "message",
+                                        "role": "user",
+                                        "content": [
+                                            {
+                                                "type": "text",
+                                                "text": text_content
+                                            }
+                                        ]
+                                    }
+                                })
+                                agent.ws_app.send(conversation_message)
+                                logger.info("Sent user message to OpenAI")
+                                
+                                # Force a response
+                                response_message = json.dumps({
+                                    "type": "response.create"
+                                })
+                                agent.ws_app.send(response_message)
+                                logger.info("Manually triggered a response from OpenAI")
+                            except Exception as e:
+                                logger.error(f"Error sending test message to OpenAI: {e}")
                     except json.JSONDecodeError:
-                        logger.warning(f"Received invalid JSON: {data[:100]}...")
+                        logger.warning(f"Received invalid JSON from frontend: {data[:100]}...")
+                        
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
     except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+        logger.error(f"Error in WebSocket handler: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
     finally:
         # Clean up
+        logger.info("Cleaning up WebSocket resources")
         init_task.cancel()
         agent_task.cancel()
         agent.stop()
-        logger.info("Websocket connection closed, agent stopped")
+        logger.info("WebSocket connection closed, agent stopped")
 
 # Initialize on startup
 @app.on_event("startup")
