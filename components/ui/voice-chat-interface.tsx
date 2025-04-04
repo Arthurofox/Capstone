@@ -1,458 +1,289 @@
-"use client";
-
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 
 export function VoiceChatInterface() {
-  const [connected, setConnected] = useState<boolean>(false);
-  const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
+  const [connected, setConnected] = useState(false);
   const [debugMessages, setDebugMessages] = useState<string[]>([]);
-  const wsRef = useRef<WebSocket | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const processorRef = useRef<ScriptProcessorNode | null>(null);
-  const activeRef = useRef<boolean>(false);
-  const audioElementRef = useRef<HTMLAudioElement | null>(null);
-
-  // Log debug messages
-  const logDebug = (msg: string) => {
-    console.log(msg);
-    setDebugMessages((prev) => [...prev, `${new Date().toISOString().slice(11, 19)}: ${msg}`]);
-  };
-
-  // Calculate RMS of audio buffer
-  const calculateRMS = (buffer: Float32Array): number => {
-    let sum = 0;
-    for (let i = 0; i < buffer.length; i++) {
-      sum += buffer[i] * buffer[i];
-    }
-    return Math.sqrt(sum / buffer.length);
-  };
-
-  // Downsample audio to 16kHz for OpenAI
-  const downsampleTo16kHz = (buffer: Float32Array, originalSampleRate: number): Float32Array => {
-    const ratio = originalSampleRate / 16000;
-    const newLength = Math.round(buffer.length / ratio);
-    const result = new Float32Array(newLength);
-    
-    for (let i = 0; i < newLength; i++) {
-      const oldIndex = Math.floor(i * ratio);
-      result[i] = buffer[oldIndex];
-    }
-    
-    return result;
-  };
-
-  // Convert Float32Array to Int16Array
-  const float32ToInt16 = (buffer: Float32Array): Int16Array => {
-    const l = buffer.length;
-    const int16Buffer = new Int16Array(l);
-    for (let i = 0; i < l; i++) {
-      let s = Math.max(-1, Math.min(1, buffer[i]));
-      int16Buffer[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-    }
-    return int16Buffer;
-  };
-
-  // Play a test sound
-  const testAudio = () => {
-    try {
-      // Create a simple beep sound
-      const audioContext = new AudioContext();
-      const oscillator = audioContext.createOscillator();
-      const gainNode = audioContext.createGain();
-      
-      oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(440, audioContext.currentTime);
-      gainNode.gain.setValueAtTime(0.5, audioContext.currentTime);
-      
-      oscillator.connect(gainNode);
-      gainNode.connect(audioContext.destination);
-      
-      oscillator.start();
-      logDebug("Playing test tone...");
-      
-      setTimeout(() => {
-        oscillator.stop();
-        audioContext.close();
-        logDebug("Test tone stopped");
-      }, 1000);
-    } catch (error) {
-      if (error instanceof Error) {
-        logDebug(`Error playing test audio: ${error.message}`);
-      }
-    }
-  };
-
-  // Create a WAV file from PCM data
-  const createWavFile = (audioData: Int16Array): Blob => {
-    // WAV file header
-    const numChannels = 1; // mono
-    const sampleRate = 16000; // 16kHz
-    const bitsPerSample = 16; // 16-bit
-    const blockAlign = numChannels * bitsPerSample / 8;
-    const byteRate = sampleRate * blockAlign;
-    const dataSize = audioData.length * (bitsPerSample / 8);
-    const buffer = new ArrayBuffer(44 + dataSize);
-    const view = new DataView(buffer);
-    
-    // RIFF identifier
-    writeString(view, 0, 'RIFF');
-    // File length
-    view.setUint32(4, 36 + dataSize, true);
-    // RIFF type
-    writeString(view, 8, 'WAVE');
-    // Format chunk identifier
-    writeString(view, 12, 'fmt ');
-    // Format chunk length
-    view.setUint32(16, 16, true);
-    // Sample format (raw)
-    view.setUint16(20, 1, true);
-    // Channel count
-    view.setUint16(22, numChannels, true);
-    // Sample rate
-    view.setUint32(24, sampleRate, true);
-    // Byte rate (sample rate * block align)
-    view.setUint32(28, byteRate, true);
-    // Block align (channel count * bytes per sample)
-    view.setUint16(32, blockAlign, true);
-    // Bits per sample
-    view.setUint16(34, bitsPerSample, true);
-    // Data chunk identifier
-    writeString(view, 36, 'data');
-    // Data chunk length
-    view.setUint32(40, dataSize, true);
-    
-    // Write the PCM samples
-    const offset = 44;
-    for (let i = 0; i < audioData.length; i++) {
-      view.setInt16(offset + i * 2, audioData[i], true);
-    }
-    
-    return new Blob([buffer], { type: 'audio/wav' });
-  };
+  const [timer, setTimer] = useState(0);
+  const [isAnimating, setIsAnimating] = useState(false);
   
-  // Helper function to write a string to a DataView
-  const writeString = (view: DataView, offset: number, string: string) => {
-    for (let i = 0; i < string.length; i++) {
-      view.setUint8(offset + i, string.charCodeAt(i));
-    }
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const audioElementRef = useRef<HTMLAudioElement | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Utility function to update debug messages (no console logs)
+  const logDebug = (msg: string) => {
+    setDebugMessages((prev) => [
+      ...prev,
+      new Date().toISOString().slice(11, 19) + ": " + msg,
+    ]);
   };
 
-  // Handle audio data from backend
-  const handleAudioData = (audioBuffer: ArrayBuffer) => {
-    try {
-      // Convert the received PCM16 data to a WAV file
-      const int16Data = new Int16Array(audioBuffer);
-      logDebug(`Received audio chunk: ${int16Data.length} samples`);
-      
-      // Create a WAV blob from the PCM data
-      const wavBlob = createWavFile(int16Data);
-      
-      // Create an object URL for the blob
-      const objectUrl = URL.createObjectURL(wavBlob);
-      
-      // Create an audio element if it doesn't exist
-      if (!audioElementRef.current) {
-        const audioElement = document.createElement('audio');
-        audioElement.setAttribute('controls', 'none');
-        audioElement.style.display = 'none';
-        document.body.appendChild(audioElement);
-        
-        audioElement.onplay = () => {
-          setIsSpeaking(true);
-          logDebug("Audio playback started");
-        };
-        
-        audioElement.onended = () => {
-          setIsSpeaking(false);
-          logDebug("Audio playback ended");
-          
-          // Clean up the object URL
-          URL.revokeObjectURL(audioElement.src);
-        };
-        
-        audioElementRef.current = audioElement;
-      }
-      
-      // Set the source and play
-      const audioElement = audioElementRef.current;
-      audioElement.src = objectUrl;
-      audioElement.volume = 1.0; // Full volume
-      
-      // Autoplay with user gesture requirement workaround
-      const playPromise = audioElement.play();
-      if (playPromise !== undefined) {
-        playPromise.catch(error => {
-          logDebug(`Audio play error: ${error}`);
-          // Show a play button if autoplay is blocked
-        });
-      }
-    } catch (error) {
-      if (error instanceof Error) {
-        logDebug(`Error handling audio data: ${error.message}`);
-        console.error(error);
-      }
-    }
+  // Format time for the timer display (MM:SS format)
+  const formatTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Send a test message
-  const sendTestMessage = () => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      const testMessage = {
-        type: "text",
-        content: "Hello Sophia, can you hear me? Please respond with a greeting."
-      };
-      wsRef.current.send(JSON.stringify(testMessage));
-      logDebug("Sent test message to trigger a response");
-    } else {
-      logDebug("WebSocket not connected");
-    }
-  };
-
-  // Start voice chat
-  const startVoiceChat = async () => {
-    try {
-      activeRef.current = true;
-      logDebug("Starting voice chat...");
-      
-      // Connect to backend WebSocket
-      const wsUrl = "ws://localhost:8000/ws/voice";
-      logDebug(`Connecting to WebSocket at ${wsUrl}`);
-      
-      const ws = new WebSocket(wsUrl);
-      ws.binaryType = "arraybuffer";
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        setConnected(true);
-        logDebug("Connected to voice agent backend");
-      };
-
-      ws.onmessage = (event: MessageEvent) => {
-        try {
-          if (event.data instanceof ArrayBuffer) {
-            logDebug(`Received audio data: ${event.data.byteLength} bytes`);
-            handleAudioData(event.data);
-          } else if (typeof event.data === 'string') {
-            // Log JSON messages
-            try {
-              const parsed = JSON.parse(event.data);
-              const jsonString = JSON.stringify(parsed);
-              
-              // Log transcripts
-              if (parsed.type === 'response.audio_transcript.done') {
-                logDebug(`Transcript: ${parsed.transcript}`);
-              }
-              
-              // Log brief preview of JSON responses
-              logDebug("Received: " + (jsonString.length > 150 ? jsonString.substring(0, 150) + "..." : jsonString));
-            } catch (e) {
-              logDebug(`Error parsing JSON: ${e instanceof Error ? e.message : 'Unknown error'}`);
-            }
-          }
-        } catch (e) {
-          logDebug(`Error processing message: ${e instanceof Error ? e.message : 'Unknown error'}`);
-        }
-      };
-
-      ws.onerror = (error: Event) => {
-        logDebug("WebSocket error occurred");
-        console.error("WebSocket error:", error);
-      };
-
-      ws.onclose = (event: CloseEvent) => {
-        setConnected(false);
-        logDebug(`WebSocket closed. Code: ${event.code}, Reason: ${event.reason || "none provided"}`);
-      };
-
-      // Create audio context and request microphone access
-      const audioCtx = new AudioContext();
-      audioContextRef.current = audioCtx;
-      logDebug(`AudioContext created. Sample rate: ${audioCtx.sampleRate}Hz`);
-      
-      // Resume AudioContext if needed (required by some browsers)
-      if (audioCtx.state === 'suspended') {
-        await audioCtx.resume();
-        logDebug("AudioContext resumed");
-      }
-      
-      // Request microphone access
-      logDebug("Requesting microphone access...");
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        }
-      });
-      mediaStreamRef.current = stream;
-      logDebug("Microphone access granted");
-      
-      // Setup audio processing
-      const source = audioCtx.createMediaStreamSource(stream);
-      const processor = audioCtx.createScriptProcessor(4096, 1, 1);
-      
-      processor.onaudioprocess = (e: AudioProcessingEvent) => {
-        if (!activeRef.current) return;
-        
-        const inputData = e.inputBuffer.getChannelData(0);
-        
-        // Calculate volume for debugging
-        const volume = calculateRMS(inputData);
-        const now = Date.now();
-        if (!window.lastVolumeLog || now - window.lastVolumeLog > 2000) {
-          logDebug(`Mic volume: ${volume.toFixed(4)}`);
-          window.lastVolumeLog = now;
-        }
-        
-        // Log when voice is detected
-        if (volume > 0.01) {
-          logDebug(`Voice detected at volume ${volume.toFixed(3)}`);
-        }
-        
-        // Downsample to 16kHz for OpenAI
-        let processedData: Float32Array;
-        if (audioCtx.sampleRate !== 16000) {
-          processedData = downsampleTo16kHz(inputData, audioCtx.sampleRate);
-        } else {
-          processedData = inputData;
-        }
-        
-        // Convert to PCM16 and send
-        const int16Data = float32ToInt16(processedData);
-        
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          wsRef.current.send(int16Data.buffer);
-          
-          // Log sends periodically
-          if (!window.lastSendLog || now - window.lastSendLog > 2000) {
-            logDebug(`Sent audio data: ${int16Data.buffer.byteLength} bytes`);
-            window.lastSendLog = now;
-          }
-        } else {
-          logDebug("WebSocket not ready");
-        }
-      };
-      
-      source.connect(processor);
-      processorRef.current = processor;
-      
-      logDebug("Audio processing set up");
-      
-      // Send a test message after 3 seconds
-      setTimeout(() => {
-        sendTestMessage();
-      }, 3000);
-      
-    } catch (err) {
-      logDebug(`Error in startVoiceChat: ${err instanceof Error ? err.message : 'Unknown error'}`);
-      stopVoiceChat();
-    }
-  };
-
-  // Stop voice chat
-  const stopVoiceChat = () => {
-    logDebug("Stopping voice chat...");
-    activeRef.current = false;
-    
-    // Close WebSocket
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-    
-    // Clean up audio processing
-    if (processorRef.current) {
-      processorRef.current.disconnect();
-      processorRef.current = null;
-    }
-    
-    // Stop microphone
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach(track => track.stop());
-      mediaStreamRef.current = null;
-    }
-    
-    // Close audio context
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-      audioContextRef.current = null;
-    }
-    
-    // Clean up audio element
-    if (audioElementRef.current) {
-      if (audioElementRef.current.src) {
-        URL.revokeObjectURL(audioElementRef.current.src);
-      }
-      if (audioElementRef.current.parentNode) {
-        audioElementRef.current.parentNode.removeChild(audioElementRef.current);
-      }
-      audioElementRef.current = null;
-    }
-    
-    setConnected(false);
-    setIsSpeaking(false);
-    logDebug("Voice chat stopped");
-  };
-
-  // Clean up on unmount
+  // Timer management
   useEffect(() => {
+    if (connected) {
+      timerIntervalRef.current = setInterval(() => {
+        setTimer(prev => prev + 1);
+      }, 1000);
+    } else {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = null;
+      }
+      setTimer(0);
+    }
+
     return () => {
-      if (connected) {
-        stopVoiceChat();
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
       }
     };
   }, [connected]);
 
+  const startVoiceChat = async () => {
+    setIsAnimating(true);
+    
+    try {
+      const tokenResponse = await fetch("http://localhost:8000/session");
+      if (!tokenResponse.ok) {
+        throw new Error("Failed to fetch ephemeral token");
+      }
+      const tokenData = await tokenResponse.json();
+      const ephemeralKey = tokenData.client_secret.value;
+
+      const pc = new RTCPeerConnection();
+      pcRef.current = pc;
+
+      pc.ontrack = (event) => {
+        const [remoteStream] = event.streams;
+        if (!audioElementRef.current) {
+          const audioEl = document.createElement("audio");
+          audioEl.autoplay = true;
+          document.body.appendChild(audioEl);
+          audioElementRef.current = audioEl;
+        }
+        audioElementRef.current.srcObject = remoteStream;
+      };
+
+      pc.createDataChannel("oai-events");
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      localStreamRef.current = stream;
+
+      // Local muted playback (for testing mic)
+      const localAudio = document.createElement("audio");
+      localAudio.srcObject = stream;
+      localAudio.autoplay = true;
+      localAudio.muted = true;
+      document.body.appendChild(localAudio);
+
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      const baseUrl = "https://api.openai.com/v1/realtime";
+      const model = "gpt-4o-realtime-preview-2024-12-17";
+      const sdpResponse = await fetch(`${baseUrl}?model=${model}`, {
+        method: "POST",
+        body: offer.sdp,
+        headers: {
+          Authorization: `Bearer ${ephemeralKey}`,
+          "Content-Type": "application/sdp",
+        },
+      });
+      const sdpAnswer = await sdpResponse.text();
+      await pc.setRemoteDescription({ type: "answer", sdp: sdpAnswer });
+
+      setConnected(true);
+    } catch (error) {
+      logDebug(
+        `Error starting voice chat: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    } finally {
+      setIsAnimating(false);
+    }
+  };
+
+  const stopVoiceChat = () => {
+    if (pcRef.current) {
+      pcRef.current.close();
+      pcRef.current = null;
+    }
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((track) => track.stop());
+      localStreamRef.current = null;
+    }
+    setConnected(false);
+  };
+
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen relative z-10">
-      <div className="mb-4 text-center">
-        <div className={`px-3 py-1 rounded-full inline-block ${
-          isSpeaking ? "bg-green-500" : connected ? "bg-blue-500" : "bg-gray-500"
-        }`}>
-          {isSpeaking ? "AI Speaking" : connected ? "Connected" : "Disconnected"}
-        </div>
-      </div>
-      
-      <button
-        onClick={connected ? stopVoiceChat : startVoiceChat}
-        className="px-6 py-3 bg-blue-500 text-white rounded-lg shadow-lg hover:bg-blue-600 transition-colors"
+    <div
+      style={{
+        width: "100%",
+        height: "100%",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        // No background - will use the parent container's background
+      }}
+    >
+      <div
+        style={{
+          backgroundColor: "rgba(255, 255, 255, 0.15)",
+          backdropFilter: "blur(8px)",
+          padding: "2rem",
+          borderRadius: "1.5rem",
+          border: "1px solid rgba(255, 255, 255, 0.2)",
+          boxShadow: "0 8px 32px rgba(0, 0, 0, 0.08)",
+          textAlign: "center",
+          width: "280px",
+          maxWidth: "90%",
+          transition: "all 0.3s ease",
+        }}
       >
-        {connected ? "Stop Voice Chat" : "Start Voice Chat"}
-      </button>
-      
-      {connected && (
-        <button
-          onClick={sendTestMessage}
-          className="mt-2 px-6 py-3 bg-green-500 text-white rounded-lg shadow-lg hover:bg-green-600 transition-colors"
+        <h2 
+          style={{ 
+            marginBottom: "1.5rem",
+            fontSize: "1.5rem",
+            fontWeight: "500",
+            transition: "color 0.3s ease",
+            color: connected ? "#4CAF50" : "#333"
+          }}
         >
-          Test Response
+          {connected ? "Voice Chat Active" : "Voice Chat"}
+        </h2>
+        
+        {connected && (
+          <div 
+            style={{
+              marginBottom: "1.5rem",
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
+              gap: "0.5rem"
+            }}
+          >
+            <div 
+              style={{
+                width: "12px",
+                height: "12px",
+                borderRadius: "50%",
+                backgroundColor: "#4CAF50",
+                animation: "pulse 1.5s infinite",
+              }}
+            />
+            <span 
+              style={{
+                fontSize: "1.3rem",
+                fontWeight: "300",
+                fontFamily: "monospace",
+                color: "#fff"
+              }}
+            >
+              {formatTime(timer)}
+            </span>
+          </div>
+        )}
+
+        <button
+          onClick={connected ? stopVoiceChat : startVoiceChat}
+          disabled={isAnimating}
+          style={{
+            backgroundColor: connected ? "rgba(244, 67, 54, 0.1)" : "rgba(255, 255, 255, 0.15)",
+            color: connected ? "#F44336" : "#fff",
+            border: `1px solid ${connected ? "#F44336" : "rgba(255, 255, 255, 0.4)"}`,
+            padding: "0.75rem 1.5rem",
+            fontSize: "0.95rem",
+            fontWeight: "400",
+            borderRadius: "9999px",
+            cursor: "pointer",
+            transition: "all 0.3s ease",
+            outline: "none",
+            position: "relative",
+            overflow: "hidden",
+            boxShadow: connected ? "0 0 0 rgba(244, 67, 54, 0)" : "0 4px 15px rgba(0, 0, 0, 0.1)",
+            transform: isAnimating ? "scale(0.98)" : "scale(1)",
+            backdropFilter: "blur(4px)",
+          }}
+        >
+          {isAnimating ? (
+            <span>Connecting...</span>
+          ) : (
+            <span>{connected ? "End Voice Chat" : "Start Voice Chat"}</span>
+          )}
+          
+          {/* The subtle ripple animation container (hidden by overflow:hidden in the button) */}
+          {isAnimating && (
+            <span
+              style={{
+                position: "absolute",
+                top: "50%",
+                left: "50%",
+                transform: "translate(-50%, -50%)",
+                width: "150%",
+                height: "150%",
+                backgroundColor: "rgba(255, 255, 255, 0.4)",
+                borderRadius: "50%",
+                animation: "ripple 1.5s infinite",
+              }}
+            />
+          )}
         </button>
-      )}
-      
-      <button
-        onClick={testAudio}
-        className="mt-2 px-6 py-3 bg-yellow-500 text-white rounded-lg shadow-lg hover:bg-yellow-600 transition-colors"
-      >
-        Test Audio
-      </button>
-      
-      <div className="mt-4 w-full max-w-md bg-white/10 p-4 rounded-lg text-white overflow-y-auto max-h-96">
-        {debugMessages.map((msg, idx) => (
-          <p key={idx} className="text-sm mb-1">
-            {msg}
-          </p>
-        ))}
+
+        {debugMessages.length > 0 && (
+          <div
+            style={{
+              marginTop: "1.5rem",
+              maxHeight: "120px",
+              overflowY: "auto",
+              color: "rgba(255, 255, 255, 0.7)",
+              fontSize: "0.8rem",
+              textAlign: "left",
+              backgroundColor: "rgba(0, 0, 0, 0.2)",
+              borderRadius: "0.5rem",
+              padding: "0.5rem",
+            }}
+          >
+            {debugMessages.map((msg, idx) => (
+              <p key={idx} style={{ margin: "0.25rem 0", fontFamily: "monospace" }}>
+                {msg}
+              </p>
+            ))}
+          </div>
+        )}
       </div>
+
+      {/* CSS Animations */}
+      <style>
+        {`
+          @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+          }
+          
+          @keyframes ripple {
+            0% {
+              transform: translate(-50%, -50%) scale(0);
+              opacity: 1;
+            }
+            100% {
+              transform: translate(-50%, -50%) scale(1);
+              opacity: 0;
+            }
+          }
+        `}
+      </style>
     </div>
   );
-}
-
-// Add these to fix TypeScript errors
-declare global {
-  interface Window {
-    lastVolumeLog?: number;
-    lastSendLog?: number;
-    AudioContext: typeof AudioContext;
-  }
 }

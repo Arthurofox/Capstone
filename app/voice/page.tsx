@@ -53,7 +53,9 @@ export default function VoiceChatPage() {
         </nav>
 
         <main className="flex-grow flex items-center justify-center px-4 py-8">
-          <VoiceChatInterface />
+          <div className="w-full max-w-md mx-auto">
+            <VoiceChatInterface />
+          </div>
         </main>
       </div>
     </>

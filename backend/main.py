@@ -1,45 +1,35 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
-import os, json
-import uuid
+import os, json, uuid, re, time, base64, threading, sys, asyncio
 from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
-import logging
-import asyncio
-import sys
 import pinecone
-import re, time
-import base64, threading
-
-
+import aiohttp
 # Add the current directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Silence logging output (only CRITICAL will be shown)
+import logging
+logging.getLogger().setLevel(logging.CRITICAL)
 
 # Import custom modules
 from app.resume_processor import ResumeProcessor
 from app.rag_system import JobOfferRAG
 from app.prompt_handler import CareerAssistantPromptHandler
 from app.formatters import format_job_results_html
-from app.voice_agent import VoiceAgent
+from app.voice_agent import VoiceAgentRTC
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Load environment variables
 load_dotenv()
 
-# Initialize FastAPI app
 app = FastAPI(
     title="Career Assistant API",
     description="API for career guidance, resume analysis, and job recommendations",
     version="1.0.0"
 )
 
-# Configure CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -48,26 +38,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize a shared ChatOpenAI instance
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7, api_key=os.getenv("OPENAI_API_KEY"))
-
-# Initialize Pinecone
 pc = pinecone.Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 
-# Initialize components
 resume_processor = ResumeProcessor()
 job_offer_rag = JobOfferRAG()
-prompt_handler = CareerAssistantPromptHandler(
-    prompt_xml_path="app/prompts/career_assistant_prompt.xml"
-)
+prompt_handler = CareerAssistantPromptHandler(prompt_xml_path="app/prompts/career_assistant_prompt.xml")
 
-# Create temp directory if it doesn't exist
 os.makedirs("temp", exist_ok=True)
-
-# In-memory store for chat history
 chat_sessions = {}
 
-# Pydantic models for request/response validation
 class ChatMessage(BaseModel):
     content: str
     session_id: Optional[str] = None
@@ -101,222 +81,134 @@ class ResumeJobMatchRequest(BaseModel):
     job_id: str
 
 def format_job_results(results):
-    """Format job search results into a readable message"""
     if not results:
-        return "I couldn't find any matching job listings at the moment. Could you try a different search term or let me know more about what you're looking for?"
-    
+        return "I couldn't find any matching job listings at the moment. Please try a different search term."
     response = "Here are some job recommendations based on your request:\n\n"
-    
     for i, result in enumerate(results, 1):
         content = result.get("content", "").strip()
         if not content:
             continue
-            
-        # Extract job information using regex
         title_match = re.search(r"Title:\s(.+?)(?:\n|$)", content)
         company_match = re.search(r"Company:\s(.+?)(?:\n|$)", content)
         location_match = re.search(r"Location:\s(.+?)(?:\n|$)", content)
-        
-        # Get values from matches or metadata
         title = title_match.group(1).strip() if title_match else result.get("metadata", {}).get("title", "")
         company = company_match.group(1).strip() if company_match else result.get("metadata", {}).get("company", "")
         location = location_match.group(1).strip() if location_match else result.get("metadata", {}).get("location", "")
-        
-        # Extract description
         description = ""
         desc_start = content.find("Description:")
         if desc_start != -1:
             desc_text = content[desc_start + len("Description:"):].strip()
             description = desc_text.split("\n\n")[0].strip()
-        
-        # Skip entries with empty title and company
         if not title and not company:
             continue
-            
-        # Build response
         response += f"{i}. {title}\n"
-        
-        if company and company != "N/A" and company != "":
+        if company and company != "N/A":
             response += f"Company: {company}\n"
-            
-        if location and location != "N/A" and location != "":
+        if location and location != "N/A":
             response += f"Location: {location}\n"
-        
         if description:
-            # Truncate to first 150 characters
             description_snippet = description[:150] + "..." if len(description) > 150 else description
             response += f"Description: {description_snippet}\n"
-        
         response += "\n"
-    
-    # If we couldn't format any jobs, provide a fallback message
     if response == "Here are some job recommendations based on your request:\n\n":
-        response = "I found some job listings, but couldn't extract their details properly. Please try a more specific search term."
-    
+        response = "I found some job listings, but couldn't extract their details properly."
     return response
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(message: ChatMessage):
     try:
-        logger.info(f"Received message: {message.content}")
-        
-        # Get or create session
         session_id = message.session_id or str(uuid.uuid4())
         if session_id not in chat_sessions:
             chat_sessions[session_id] = []
-        
-        # Get chat history
         chat_history = chat_sessions[session_id]
-        
-        # Check if the message is asking for job recommendations
         job_phrases = ["job", "career", "position", "opening", "opportunity", "employment",
-               "hiring", "work", "vacancy", "recommend", "recommendation", 
-               "internship", "intern", "trainee", "stage"]
-
-        
+                       "hiring", "work", "vacancy", "recommend", "recommendation",
+                       "internship", "intern", "trainee", "stage"]
         is_job_request = any(phrase in message.content.lower() for phrase in job_phrases)
-        
         response_content = ""
-        
         if is_job_request:
-            # This looks like a job recommendation request, use the RAG system
             try:
-                # Get job recommendations from the vector database
                 results = job_offer_rag.search_similar_jobs(message.content, k=5)
-                
                 if results:
-                    # Format the results into a nice response
                     response_content = format_job_results_html(results, llm)
                 else:
-                    # No results found, fall back to the general response
                     response_content = await prompt_handler.generate_response(
                         user_input=message.content,
                         chat_history=chat_history
                     )
-            except Exception as e:
-                logger.error(f"Error in job recommendation: {str(e)}")
-                # If there's an error, fall back to the general response
+            except Exception:
                 response_content = await prompt_handler.generate_response(
                     user_input=message.content,
                     chat_history=chat_history
                 )
         else:
-            # Not a job request, use the regular prompt handler
             response_content = await prompt_handler.generate_response(
                 user_input=message.content,
                 chat_history=chat_history
             )
-        
-        # Update chat history
         chat_history.append({"role": "user", "content": message.content})
         chat_history.append({"role": "assistant", "content": response_content})
-        
-        # Limit chat history length to prevent token issues
         if len(chat_history) > 20:
             chat_history = chat_history[-20:]
-        
         chat_sessions[session_id] = chat_history
-        
         return ChatResponse(content=response_content, session_id=session_id)
-    
     except Exception as e:
-        logger.error(f"Error in chat endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-    
 
-# Resume upload and analysis endpoint
 @app.post("/api/resume/upload", response_model=ResumeAnalysis)
 async def upload_resume(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
-    logger.info(f"File received: {file.filename}")
     temp_path = f"temp/{file.filename}"
-    
     try:
-        # Save file
         content = await file.read()
         with open(temp_path, "wb") as buffer:
             buffer.write(content)
-        
-        # Extract text from PDF
         resume_text = await resume_processor.extract_text_from_pdf(temp_path)
-        
-        # Store resume in vector database
         resume_id = await resume_processor.store_resume_in_vectordb(
             resume_text=resume_text,
             file_name=file.filename
         )
-        
-        # Analyze resume
         analysis = await resume_processor.analyze_resume(resume_text)
-        
-        # Find matching job offers using RAG
         try:
             job_matches = job_offer_rag.find_jobs_for_resume(resume_text)
-            logger.info(f"Found {len(job_matches)} matching job offers")
-        except Exception as e:
-            logger.error(f"Error finding job matches: {str(e)}")
-            # Return empty list if there's an error
+        except Exception:
             job_matches = []
-        
-        # Make sure required fields exist in the analysis
         if 'summary' not in analysis:
             analysis['summary'] = "Could not extract summary from resume."
-        
         if 'skills' not in analysis or not isinstance(analysis['skills'], list):
             analysis['skills'] = []
-            
         if 'recommendations' not in analysis or not isinstance(analysis['recommendations'], list):
             analysis['recommendations'] = []
-        
-        # Include job matches and resume ID in the response
         analysis['job_matches'] = job_matches
         analysis['resume_id'] = resume_id
-        
-        # Use background_tasks to clean up the temporary file after sending the response
         background_tasks.add_task(os.remove, temp_path)
-        
         return analysis
-
     except Exception as e:
-        logger.error(f"Error in resume upload: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-    
-# Job search endpoint
+
 @app.post("/api/jobs/search", response_model=JobSearchResponse)
 async def search_jobs(query: JobSearchQuery):
     try:
         results = job_offer_rag.search_similar_jobs(query.query, k=query.limit)
         return JobSearchResponse(results=results)
     except Exception as e:
-        logger.error(f"Error in job search: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# Ingest job offers endpoint (admin use)
 @app.post("/api/admin/ingest-jobs")
 async def ingest_jobs():
     try:
-        # This is an admin endpoint that should be secured in production
         csv_path = "dataset/combined_job_offers.csv"
-        
-        # Load and process job data synchronously for immediate feedback
         documents = job_offer_rag.load_and_process_job_data(csv_path)
-        logger.info(f"Loaded {len(documents)} job offers from CSV")
-        
-        # Ingest documents
         job_offer_rag.ingest_documents(documents)
-        
         return {
-            "status": "success", 
+            "status": "success",
             "message": f"Ingested {len(documents)} job offers into vector database"
         }
     except Exception as e:
-        logger.error(f"Error in job ingestion: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# Evaluate RAG system endpoint (admin use)
 @app.post("/api/admin/evaluate-rag", response_model=RAGEvaluationResult)
 async def evaluate_rag():
     try:
-        # Test queries for evaluation
         test_queries = [
             "Data Scientist with Python experience",
             "Entry level marketing position",
@@ -324,284 +216,59 @@ async def evaluate_rag():
             "Remote software engineer job",
             "Project management role in consulting"
         ]
-        
-        # Evaluate RAG system
         results = job_offer_rag.evaluate_rag_performance(test_queries)
-        
         return results
     except Exception as e:
-        logger.error(f"Error in RAG evaluation: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# Match resume to specific job endpoint
 @app.post("/api/resume/job-match")
 async def match_resume_to_job(request: ResumeJobMatchRequest):
     try:
-        # Get resume text
         resume_path = f"temp/{request.resume_id}.pdf"
         if not os.path.exists(resume_path):
             raise HTTPException(status_code=404, detail="Resume not found")
-        
         resume_text = await resume_processor.extract_text_from_pdf(resume_path)
-        
-        # Get job description
         job_results = job_offer_rag.search_similar_jobs(f"id:{request.job_id}", k=1)
         if not job_results:
             raise HTTPException(status_code=404, detail="Job not found")
-        
         job_description = job_results[0]["content"]
-        
-        # Match resume to job
         match_result = await resume_processor.match_resume_to_job(resume_text, job_description)
-        
         return match_result
     except Exception as e:
-        logger.error(f"Error matching resume to job: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# Health check endpoint
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
 
-## Voice endpoint
-logger = logging.getLogger(__name__)
+@app.get("/session")
+async def get_session():
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set")
+    url = "https://api.openai.com/v1/realtime/sessions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": "gpt-4o-realtime-preview-2024-12-17",
+        "voice": "alloy"
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=payload) as resp:
+            if resp.status != 200:
+                raise HTTPException(status_code=resp.status, detail="Failed to fetch ephemeral token")
+            data = await resp.json()
+    return data
 
-@app.websocket("/ws/voice")
-async def voice_websocket_endpoint(websocket: WebSocket):
-    logger.info("WebSocket connection attempt received")
-    await websocket.accept()
-    logger.info("WebSocket connection accepted")
-    
-    # Create a message queue for communication between threads
-    message_queue = asyncio.Queue()
-    
-    # Create a ready event to know when the agent is connected
-    agent_ready = threading.Event()
-    
-    # Capture the current event loop
-    current_loop = asyncio.get_running_loop()
-    
-    def voice_agent_callback(message):
-        """Callback to handle messages from the VoiceAgent"""
-        try:
-            # Use the captured event loop with a proper future
-            future = asyncio.run_coroutine_threadsafe(
-                message_queue.put(message), 
-                current_loop
-            )
-            # Wait for the result with a timeout to ensure it completes
-            try:
-                future.result(timeout=1)
-            except Exception as e:
-                logger.error(f"Error in message queue future: {e}")
-        except Exception as e:
-            logger.error(f"Error in voice agent callback: {e}")
-    
-    # Initialize the voice agent
-    agent = VoiceAgent()
-    agent.set_on_message_callback(voice_agent_callback)
-    
-    # Define a callback for when the agent connects
-    def on_connect_callback():
-        """Called when the agent successfully connects to OpenAI"""
-        logger.info("Agent connected to OpenAI API")
-        agent_ready.set()
-    
-    # Set up the connect callback
-    agent.set_on_connect_callback(on_connect_callback)
-    agent.connect()
-    
-    # Wait for agent to connect and then send initial instructions
-    async def wait_for_agent_and_initialize():
-        # Wait for agent to be ready (with timeout)
-        for _ in range(20):  # 10 second timeout (20 * 0.5s)
-            if agent_ready.is_set() or agent.connected:
-                break
-            await asyncio.sleep(0.5)
-            logger.info("Waiting for agent to connect...")
-        
-        if agent_ready.is_set() or agent.connected:
-            # Send our instructions to the agent
-            initial_prompt = (
-                "You are Sophia, a career assistant specializing in interview preparation. "
-                "Provide real-time, actionable feedback as the user practices interview responses. "
-                "Keep your responses concise and focused on helping the user improve."
-            )
-            agent.send_text(initial_prompt)
-            logger.info("Sent initial instructions to OpenAI")
-            
-            # Wait a moment for the instructions to be processed
-            await asyncio.sleep(2)
-            
-            # Update VAD settings to make it more sensitive
-            try:
-                vad_settings = json.dumps({
-                    "type": "session.update",
-                    "session": {
-                        "turn_detection": {
-                            "type": "server_vad",
-                            "threshold": 0.3,  # Lower threshold for easier activation
-                            "prefix_padding_ms": 300,
-                            "silence_duration_ms": 500,  # Longer silence for easier detection
-                            "create_response": True,
-                            "interrupt_response": True
-                        }
-                    }
-                })
-                agent.ws_app.send(vad_settings)
-                logger.info("Updated VAD settings for better voice detection")
-            except Exception as e:
-                logger.error(f"Error updating VAD settings: {e}")
-        else:
-            logger.error("Timed out waiting for agent to connect")
-    
-    # Start initialization task
-    init_task = asyncio.create_task(wait_for_agent_and_initialize())
-    
-    # Task to process messages from the agent and send to frontend
-    async def process_agent_messages():
-        """Process messages from the agent and forward them to the frontend"""
-        while True:
-            try:
-                # Wait for a message from the queue
-                agent_message = await message_queue.get()
-                
-                # Log message type
-                if isinstance(agent_message, bytes):
-                    logger.info(f"Forwarding audio data to frontend, size: {len(agent_message)} bytes")
-                    await websocket.send_bytes(agent_message)
-                else:
-                    # For JSON data, log a snippet
-                    message_preview = str(agent_message)[:100] + "..." if len(str(agent_message)) > 100 else str(agent_message)
-                    logger.info(f"Forwarding JSON to frontend: {message_preview}")
-                    await websocket.send_text(json.dumps(agent_message))
-                
-                # Mark this task as done
-                message_queue.task_done()
-            except Exception as e:
-                logger.error(f"Error processing agent message: {e}")
-                await asyncio.sleep(0.1)  # Avoid tight loop on errors
-    
-    # Start the agent message processor
-    agent_task = asyncio.create_task(process_agent_messages())
-    
-    # Counters for audio tracking
-    audio_chunk_count = 0
-    audio_byte_count = 0
-    last_log_time = time.time()
-    
-    try:
-        while True:
-            # Receive messages from the frontend
-            try:
-                msg = await asyncio.wait_for(websocket.receive(), timeout=30)
-            except asyncio.TimeoutError:
-                # Log periodic heartbeat to show the connection is still alive
-                logger.info("No messages received in the last 30 seconds")
-                continue
-                
-            if msg["type"] == "websocket.disconnect":
-                logger.info("Received disconnect message")
-                break
-                
-            elif msg["type"] == "websocket.receive":
-                if "bytes" in msg:
-                    audio_bytes = msg["bytes"]
-                    audio_chunk_count += 1
-                    audio_byte_count += len(audio_bytes)
-                    
-                    # Log every second to avoid flooding logs
-                    current_time = time.time()
-                    if current_time - last_log_time > 1:
-                        logger.info(f"Received {audio_chunk_count} audio chunks totaling {audio_byte_count} bytes in the last second")
-                        audio_chunk_count = 0
-                        audio_byte_count = 0
-                        last_log_time = current_time
-                    
-                    # Always forward audio to OpenAI
-                    agent.send_audio(audio_bytes)
-                    
-                elif "text" in msg:
-                    try:
-                        data = msg["text"]
-                        message = json.loads(data)
-                        logger.info(f"Received text message from frontend: {data[:100]}...")
-                        
-                        # Handle text commands
-                        if message.get("type") == "text":
-                            text_content = message.get("content", "")
-                            logger.info(f"Received text command: {text_content}")
-                            
-                            # Send the user text to OpenAI - FIXED: properly format the message
-                            try:
-                                # Create a conversation item with proper formatting
-                                conversation_message = json.dumps({
-                                    "type": "conversation.item.create",
-                                    "item": {
-                                        "type": "message",
-                                        "role": "user",
-                                        "content": [
-                                            {
-                                                "type": "text",
-                                                "text": text_content
-                                            }
-                                        ]
-                                    }
-                                })
-                                agent.ws_app.send(conversation_message)
-                                logger.info("Sent user message to OpenAI")
-                                
-                                # Force a response
-                                response_message = json.dumps({
-                                    "type": "response.create"
-                                })
-                                agent.ws_app.send(response_message)
-                                logger.info("Manually triggered a response from OpenAI")
-                            except Exception as e:
-                                logger.error(f"Error sending test message to OpenAI: {e}")
-                    except json.JSONDecodeError:
-                        logger.warning(f"Received invalid JSON from frontend: {data[:100]}...")
-                        
-    except WebSocketDisconnect:
-        logger.info("WebSocket disconnected")
-    except Exception as e:
-        logger.error(f"Error in WebSocket handler: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-    finally:
-        # Clean up
-        logger.info("Cleaning up WebSocket resources")
-        init_task.cancel()
-        agent_task.cancel()
-        agent.stop()
-        logger.info("WebSocket connection closed, agent stopped")
-
-# Initialize on startup
 @app.on_event("startup")
 async def startup_event():
     try:
-        logger.info("Starting up the application")
-        
-        # Check the Pinecone indexes
-        index_list = [index.name for index in pc.list_indexes()]
-        logger.info(f"Available Pinecone indexes: {index_list}")
-        
-        # Add code to check if indexes are empty and warn if they are
-        if job_offer_rag.INDEX_NAME in index_list:
-            try:
-                # Get a sample to see if there's data
-                sample_results = job_offer_rag.search_similar_jobs("sample test query", k=1)
-                if not sample_results:
-                    logger.warning(f"Job offers index '{job_offer_rag.INDEX_NAME}' exists but may be empty. Please run /api/admin/ingest-jobs")
-                else:
-                    logger.info(f"Job offers index '{job_offer_rag.INDEX_NAME}' contains data")
-            except Exception as e:
-                logger.warning(f"Could not query job offers index: {str(e)}")
-        else:
-            logger.warning(f"Job offers index '{job_offer_rag.INDEX_NAME}' does not exist. Please run /api/admin/ingest-jobs")
-    except Exception as e:
-        logger.error(f"Error during startup: {str(e)}")
+        # (Startup logic omitted for brevity; logging is suppressed.)
+        pass
+    except Exception:
+        pass
 
 if __name__ == "__main__":
     import uvicorn
