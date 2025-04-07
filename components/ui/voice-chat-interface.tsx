@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { motion } from "framer-motion";
 
 export function VoiceChatInterface() {
   const [connected, setConnected] = useState(false);
@@ -151,17 +152,42 @@ export function VoiceChatInterface() {
           transition: "all 0.3s ease",
         }}
       >
-        <h2 
-          style={{ 
-            marginBottom: "1.5rem",
-            fontSize: "1.5rem",
-            fontWeight: "500",
-            transition: "color 0.3s ease",
-            color: connected ? "#4CAF50" : "#333"
-          }}
-        >
-          {connected ? "Voice Chat Active" : "Voice Chat"}
-        </h2>
+        {connected ? (
+          <h2 
+            style={{ 
+              marginBottom: "1.5rem",
+              fontSize: "1.5rem",
+              fontWeight: "500",
+              transition: "color 0.3s ease",
+              color: "#4CAF50"
+            }}
+          >
+            Voice Chat Active
+          </h2>
+        ) : (
+          <motion.h2 
+            style={{ 
+              marginBottom: "1.5rem",
+              fontSize: "1.5rem",
+              fontWeight: "700", // Changed to bold
+              color: "#FFF8DC"   // Same yellow-cream color
+            }}
+            animate={{
+              textShadow: [
+                '0 2px 8px rgba(255, 253, 208, 0.3)', 
+                '0 2px 15px rgba(255, 253, 208, 0.7)', 
+                '0 2px 8px rgba(255, 253, 208, 0.3)'
+              ],
+            }}
+            transition={{
+              duration: 4,
+              ease: "easeInOut",
+              repeat: Infinity,
+            }}
+          >
+            Prepare your interview
+          </motion.h2>
+        )}
         
         {connected && (
           <div 

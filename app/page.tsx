@@ -144,11 +144,26 @@ export default function HomePage() {
               y: { duration: 0.5, ease: "easeOut" },
             }}
           >
-            <h1 className="text-5xl md:text-7xl font-bold text-white drop-shadow-lg mb-4">
-              Career advice in seconds.
-            </h1>
-            <p className="text-xl md:text-2xl text-white drop-shadow-md max-w-2xl mx-auto">
-              PathFinder is your AI career advisor for every step of your journey.
+            <motion.h1 
+              className="text-5xl md:text-7xl font-bold mb-4"
+              style={{ color: '#FFF8DC' }}
+              animate={{
+                textShadow: [
+                  '0 2px 8px rgba(255, 253, 208, 0.3)', 
+                  '0 2px 15px rgba(255, 253, 208, 0.7)', 
+                  '0 2px 8px rgba(255, 253, 208, 0.3)'
+                ],
+              }}
+              transition={{
+                duration: 4,
+                ease: "easeInOut",
+                repeat: Infinity,
+              }}
+            >
+              Define your path.
+            </motion.h1>
+            <p className="text-xl md:text-2xl drop-shadow-md max-w-2xl mx-auto" style={{ color: '#FFFACD' }}>
+            Explore tailored opportunities, enhanced resumes, and empowering career guidance for a stress-free journey.
             </p>
           </motion.div>
 
