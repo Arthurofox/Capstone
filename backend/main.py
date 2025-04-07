@@ -1,26 +1,21 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
-import os, json, uuid, re, time, base64, threading, sys, asyncio
+import os, json, uuid, re, time, asyncio, aiohttp, logging
 from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 import pinecone
-import aiohttp
-# Add the current directory to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Silence logging output (only CRITICAL will be shown)
-import logging
-logging.getLogger().setLevel(logging.CRITICAL)
+logging.basicConfig(level=logging.ERROR, handlers=[logging.StreamHandler()])
+logger = logging.getLogger("VoiceAgentRTC")
 
-# Import custom modules
 from app.resume_processor import ResumeProcessor
 from app.rag_system import JobOfferRAG
 from app.prompt_handler import CareerAssistantPromptHandler
 from app.formatters import format_job_results_html
-from app.voice_agent import VoiceAgentRTC
+from app.voice_agent import VoiceAgentRTC, webrtc_voice
 
 load_dotenv()
 
@@ -44,6 +39,17 @@ pc = pinecone.Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 resume_processor = ResumeProcessor()
 job_offer_rag = JobOfferRAG()
 prompt_handler = CareerAssistantPromptHandler(prompt_xml_path="app/prompts/career_assistant_prompt.xml")
+
+# Get the prompt from the handler (assuming it has a method or attribute to access the raw prompt)
+# If generate_response is async and needs input, we'll call it with a dummy input
+async def get_voice_prompt():
+    # Simplest approach: use generate_response with empty input to get the base prompt
+    prompt = await prompt_handler.generate_response(user_input="", chat_history=[])
+    return prompt
+
+# Run async function to get prompt at startup
+loop = asyncio.get_event_loop()
+voice_instruction = loop.run_until_complete(get_voice_prompt())
 
 os.makedirs("temp", exist_ok=True)
 chat_sessions = {}
@@ -153,6 +159,7 @@ async def chat(message: ChatMessage):
         chat_sessions[session_id] = chat_history
         return ChatResponse(content=response_content, session_id=session_id)
     except Exception as e:
+        logger.error("Error in /api/chat: %s", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/resume/upload", response_model=ResumeAnalysis)
@@ -183,6 +190,7 @@ async def upload_resume(background_tasks: BackgroundTasks, file: UploadFile = Fi
         background_tasks.add_task(os.remove, temp_path)
         return analysis
     except Exception as e:
+        logger.error("Error in /api/resume/upload: %s", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/jobs/search", response_model=JobSearchResponse)
@@ -191,6 +199,7 @@ async def search_jobs(query: JobSearchQuery):
         results = job_offer_rag.search_similar_jobs(query.query, k=query.limit)
         return JobSearchResponse(results=results)
     except Exception as e:
+        logger.error("Error in /api/jobs/search: %s", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/admin/ingest-jobs")
@@ -204,6 +213,7 @@ async def ingest_jobs():
             "message": f"Ingested {len(documents)} job offers into vector database"
         }
     except Exception as e:
+        logger.error("Error in /api/admin/ingest-jobs: %s", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/admin/evaluate-rag", response_model=RAGEvaluationResult)
@@ -219,6 +229,7 @@ async def evaluate_rag():
         results = job_offer_rag.evaluate_rag_performance(test_queries)
         return results
     except Exception as e:
+        logger.error("Error in /api/admin/evaluate-rag: %s", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/resume/job-match")
@@ -235,6 +246,7 @@ async def match_resume_to_job(request: ResumeJobMatchRequest):
         match_result = await resume_processor.match_resume_to_job(resume_text, job_description)
         return match_result
     except Exception as e:
+        logger.error("Error in /api/resume/job-match: %s", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
@@ -245,7 +257,9 @@ async def health_check():
 async def get_session():
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
+        logger.error("OPENAI_API_KEY environment variable is not set")
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set")
+
     url = "https://api.openai.com/v1/realtime/sessions"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -253,22 +267,28 @@ async def get_session():
     }
     payload = {
         "model": "gpt-4o-realtime-preview-2024-12-17",
-        "voice": "alloy"
+        "voice": "alloy",
+        "instructions": voice_instruction  # Use the prompt from handler
     }
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, headers=headers, json=payload) as resp:
-            if resp.status != 200:
-                raise HTTPException(status_code=resp.status, detail="Failed to fetch ephemeral token")
-            data = await resp.json()
-    return data
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as response:
+                if response.status != 200:
+                    logger.error("Failed to fetch ephemeral token: %s", await response.text())
+                    raise HTTPException(status_code=response.status, detail="Failed to fetch ephemeral token")
+                return await response.json()
+    except Exception as e:
+        logger.error("Critical error in get_session: %s", str(e))
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+voice_agent = VoiceAgentRTC()
+asyncio.ensure_future(voice_agent.connect())
+app.add_api_route("/webrtc/voice", webrtc_voice, methods=["POST"])
 
 @app.on_event("startup")
 async def startup_event():
-    try:
-        # (Startup logic omitted for brevity; logging is suppressed.)
-        pass
-    except Exception:
-        pass
+    pass
 
 if __name__ == "__main__":
     import uvicorn
