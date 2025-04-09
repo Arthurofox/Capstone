@@ -78,7 +78,7 @@ export function AudioPlayer() {
       
       <audio 
         ref={audioRef} 
-        src="/lofi-background.mp3" 
+        src="/lofi-background5.mp3" 
         loop 
         autoPlay 
       />
