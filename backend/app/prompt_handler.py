@@ -179,27 +179,10 @@ class CareerAssistantPromptHandler:
         for guideline in guidelines:
             prompt_lines.append(f"  - {guideline}")
         
+        # Add instruction to avoid using section headers
+        prompt_lines.append("\nIMPORTANT: Your responses should be conversational and natural without using explicit section headers like 'Acknowledgment:', 'Insight:', etc.")
+        
         return "\n".join(prompt_lines)
-    
-    def create_langchain_prompt(self) -> ChatPromptTemplate:
-        """
-        Create a LangChain prompt template using the comprehensive system prompt.
-        
-        Returns:
-            A LangChain ChatPromptTemplate.
-        """
-        system_template = self.create_system_prompt()
-        system_message_prompt = SystemMessagePromptTemplate.from_template(system_template)
-        
-        human_template = "{input}"
-        human_message_prompt = HumanMessagePromptTemplate.from_template(human_template)
-        
-        chat_prompt = ChatPromptTemplate.from_messages([
-            system_message_prompt,
-            human_message_prompt
-        ])
-        
-        return chat_prompt
     
     async def generate_response(self, user_input: str, chat_history: Optional[List[Dict[str, str]]] = None) -> str:
         """
@@ -221,6 +204,9 @@ class CareerAssistantPromptHandler:
                     if message["role"] == "user":
                         messages.append(HumanMessage(content=message["content"]))
                     elif message["role"] == "assistant":
+                        messages.append(SystemMessage(content=message["content"], name="assistant"))
+                    elif message["role"] == "system":
+                        # Add additional system messages for context (like resume data)
                         messages.append(SystemMessage(content=message["content"]))
             
             messages.append(HumanMessage(content=user_input))
@@ -234,5 +220,5 @@ class CareerAssistantPromptHandler:
 
 # For testing purposes, you can run this module directly:
 if __name__ == "__main__":
-    handler = CareerAssistantPromptHandler(prompt_xml_path="app/prompts/career_assistant_prompt.xml")
+    handler = CareerAssistantPromptHandler(prompt_xml_path="backend/app/prompts/career_assistant_prompt.xml")
     print(handler.create_system_prompt())

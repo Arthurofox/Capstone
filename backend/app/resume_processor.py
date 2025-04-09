@@ -24,7 +24,8 @@ embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 # Initialize ChatOpenAI
 llm = ChatOpenAI(
     model="gpt-4o-mini",
-    temperature=0,
+    temperature=0.4,
+    max_tokens=2048,
     api_key=os.getenv("OPENAI_API_KEY")
 )
 
@@ -32,6 +33,7 @@ llm = ChatOpenAI(
 json_llm = ChatOpenAI(
     model="gpt-4o-mini",
     temperature=0,
+    max_tokens=2048,
     api_key=os.getenv("OPENAI_API_KEY"),
     response_format={"type": "json_object"}
 )
@@ -180,12 +182,14 @@ class ResumeProcessor:
             # Set up messages for LangChain
             messages = [
                 SystemMessage(content=(
-                    "You are an expert resume analyzer. Extract the following information "
-                    "from the resume text: education, skills, experience, languages, and "
-                    "certifications. Also provide a short summary of the candidate's profile. "
-                    "You MUST include a 'recommendations' field with a list of suggested job positions. "
-                    "The JSON MUST include exactly these fields: 'summary', 'skills' (as an array of strings), "
-                    "and 'recommendations' (as an array of strings). Format your response as a valid JSON object."
+                    "You are an expert resume analyzer and career advisor. "
+                    "You have been given a candidate's resume text, and you will speak directly to the candidate. "
+                    "1) Provide a short summary of the candidate's profile in the second person, focusing on key strengths. "
+                    "2) Extract the candidate's skills (list them as an array of strings). "
+                    "3) Provide at least three concrete suggestions for improving the resume. "
+                    "4) Recommend at least three suitable job positions that align with the candidate's background. "
+                    "Return your answer as valid JSON with exactly these four fields: "
+                    "'summary' (string), 'skills' (array of strings), 'Recommendations' (array of strings), and 'jobRecommendations' (array of strings)."
                 )),
                 HumanMessage(content=resume_text)
             ]

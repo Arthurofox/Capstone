@@ -155,11 +155,54 @@ export function ChatbotInterface({
         throw new Error(`Upload API error: ${res.statusText}`);
       }
       const data: ResumeAnalysis = await res.json();
+      
+      if (sessionId) {
+        try {
+          await fetch("http://localhost:8000/api/session/update", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              session_id: sessionId,
+              resume_data: data
+            }),
+          });
+        } catch (error) {
+          console.error("Error updating session with resume data:", error);
+        }
+      }
 
-      // Example: show summary in the chat
+      // Format resume analysis as HTML
+      const skills = data.skills.join(", ");
+      const recommendations = data.recommendations.map(rec => `• ${rec}`).join("<br>");
+      
+      // Prepare job matches section if available
+      let jobMatchesHTML = "";
+      if (data.job_matches && data.job_matches.length > 0) {
+        jobMatchesHTML = "<strong>Matching Job Opportunities:</strong><br>";
+        data.job_matches.forEach((job, index) => {
+          const metadata = job.metadata || {};
+          jobMatchesHTML += `${index + 1}. ${metadata.title || 'Untitled'} at ${metadata.company || 'Company'}<br>`;
+        });
+      }
+
+      // Create a well-formatted HTML message
+      const analysisHTML = `
+        <div class="resume-analysis">
+          <strong>Resume Analysis</strong><br><br>
+          <strong>Summary:</strong><br>
+          ${data.summary}<br><br>
+          <strong>Skills:</strong><br>
+          ${skills}<br><br>
+          <strong>recommendations:</strong><br>
+          ${recommendations}<br><br>
+          ${jobMatchesHTML}
+        </div>
+      `;
+
+      // Add the analysis as a bot message
       const analysisMessage: Message = {
         id: Date.now().toString() + "-resume",
-        content: `**Resume Analysis**\n\n**Summary:** ${data.summary}\n**Skills:** ${data.skills.join(", ")}\n**Recommendations:** ${data.recommendations.join(", ")}`,
+        content: analysisHTML,
         type: "bot",
         timestamp: new Date(),
       };
