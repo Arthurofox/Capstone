@@ -1,6 +1,3 @@
-
-
-```markdown
 # PathFinder: Your AI-Powered Career Companion
 
 ![PathFinder Logo](/public/background.png)
@@ -11,16 +8,20 @@ PathFinder is an intelligent, multi-modal career assistant designed to guide use
 
 ## Table of Contents
 
-- [Overview](#overview)
-- [Features](#features)
-- [Architecture & Technologies](#architecture--technologies)
-- [Installation & Setup](#installation--setup)
-  - [Frontend Setup](#frontend-setup)
-  - [Backend Setup](#backend-setup)
-  - [Docker Deployment](#docker-deployment)
-- [Usage](#usage)
-- [Evaluation & Future Improvements](#evaluation--future-improvements)
-- [References](#references)
+- [PathFinder: Your AI-Powered Career Companion](#pathfinder-your-ai-powered-career-companion)
+  - [Table of Contents](#table-of-contents)
+  - [Overview](#overview)
+  - [Features](#features)
+  - [Architecture \& Technologies](#architecture--technologies)
+  - [Installation \& Setup](#installation--setup)
+    - [Frontend Setup](#frontend-setup)
+    - [Backend Setup](#backend-setup)
+    - [Docker Deployment](#docker-deployment)
+  - [Usage](#usage)
+  - [Evaluation \& Future Improvements](#evaluation--future-improvements)
+    - [Evaluation Highlights](#evaluation-highlights)
+    - [Future Roadmap](#future-roadmap)
+  - [Conclusion](#conclusion)
 
 ---
 
