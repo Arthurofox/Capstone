@@ -1,3 +1,17 @@
+"""
+Module: resume_processor.py
+---------------------------
+This module provides functionality to process and analyze resumes.
+It handles text extraction from PDF files, stores resumes in a vector database,
+and uses a language model to analyze and extract key career insights from resume text.
+Also, it assists with extracting job preferences and matching resumes to job descriptions.
+
+Key Components:
+    - ResumeProcessor class: Manages resume text extraction, vector storage, and analysis.
+    - PDF text extraction: Uses PyPDFLoader to extract text.
+    - Analysis and matching: Generates JSON output using a language model.
+"""
+
 import os
 import json
 import uuid
@@ -12,16 +26,17 @@ from langchain_pinecone import PineconeVectorStore
 import pinecone
 import asyncio
 from dotenv import load_dotenv
-# Load environment variables
+
+# Load environment variables from .env file.
 load_dotenv()
 
-# Initialize Pinecone
+# Initialize Pinecone for resume storage.
 pc = pinecone.Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 
-# Initialize embeddings
+# Initialize embeddings with a lightweight model.
 embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 
-# Initialize ChatOpenAI
+# Initialize ChatOpenAI instance for general resume analysis.
 llm = ChatOpenAI(
     model="gpt-4o-mini",
     temperature=0.4,
@@ -29,7 +44,7 @@ llm = ChatOpenAI(
     api_key=os.getenv("OPENAI_API_KEY")
 )
 
-# JSON format specific LLM
+# Initialize ChatOpenAI instance for JSON-based responses.
 json_llm = ChatOpenAI(
     model="gpt-4o-mini",
     temperature=0,
@@ -40,38 +55,39 @@ json_llm = ChatOpenAI(
 
 class ResumeProcessor:
     """
-    Class to process and analyze resumes
-    """
+    Processes and analyzes resumes, including text extraction from PDFs,
+    storing resumes in a vector database, and generating analysis using a language model.
     
+    Attributes:
+        RESUME_INDEX_NAME (str): Name of the Pinecone index used for resumes.
+        text_splitter (RecursiveCharacterTextSplitter): Splits resume text into manageable chunks.
+        vector_store (PineconeVectorStore): Manages storage and retrieval operations for resumes.
+    """
     RESUME_INDEX_NAME = "resumes"
     
     def __init__(self):
-        """Initialize the resume processor"""
+        """Initialize the resume processor by setting up the text splitter and vector store."""
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1500,
             chunk_overlap=150,
             separators=["\n\n", "\n", ". ", ", ", " ", ""]
         )
-        
-        # Initialize vector store for resumes
         self._init_vector_store()
     
     def _init_vector_store(self):
-        """Initialize the vector store for resumes"""
-        # Get list of indexes
+        """Initialize the Pinecone vector store for resume storage."""
         index_list = [index.name for index in pc.list_indexes()]
         
-        # Create Pinecone index if it doesn't exist
+        # Create a Pinecone index if it does not exist.
         if self.RESUME_INDEX_NAME not in index_list:
             try:
                 pc.create_index(
                     name=self.RESUME_INDEX_NAME,
-                    dimension=1536,  # dimension for text-embedding-3-small
+                    dimension=1536,  # Dimension for text-embedding-3-small model.
                     metric="cosine"
                 )
             except Exception as e:
                 print(f"Error creating resume index: {str(e)}")
-                # Fall back to default settings if needed
                 print("Retrying with default settings...")
                 pc.create_index(
                     name=self.RESUME_INDEX_NAME,
@@ -79,7 +95,7 @@ class ResumeProcessor:
                     metric="cosine"
                 )
         
-        # Initialize vector store
+        # Initialize the vector store with the created or existing index.
         index = pc.Index(self.RESUME_INDEX_NAME)
         self.vector_store = PineconeVectorStore(
             index=index,
@@ -88,76 +104,78 @@ class ResumeProcessor:
     
     async def extract_text_from_pdf(self, file_path: str) -> str:
         """
-        Extract text from PDF file
+        Extract text from a PDF file.
+        
+        Uses PyPDFLoader to load the PDF, splits the extracted text into chunks,
+        and then joins the chunks into a single text string.
         
         Args:
-            file_path: Path to the PDF file
+            file_path (str): Path to the PDF file.
             
         Returns:
-            Extracted text from PDF
+            str: The complete extracted text.
         """
         loader = PyPDFLoader(file_path)
         documents = loader.load()
         chunks = self.text_splitter.split_documents(documents)
         
-        # Join all chunks into a single text
+        # Concatenate all chunks of text into a single string.
         text = " ".join([chunk.page_content for chunk in chunks])
         return text
         
     async def store_resume_in_vectordb(self, resume_text: str, file_name: str, metadata: Dict = None) -> str:
         """
-        Store resume in vector database for future matching
+        Store a resume in the vector database and return a unique resume ID.
+        
+        Splits the resume text into document chunks, adds metadata, and ingests these
+        chunks into the vector store. A unique ID is generated and associated with the resume.
         
         Args:
-            resume_text: Text extracted from resume
-            file_name: Original filename of the resume
-            metadata: Additional metadata about the resume
+            resume_text (str): The full text of the resume.
+            file_name (str): The original filename of the resume.
+            metadata (Dict, optional): Additional metadata about the resume.
             
         Returns:
-            ID of the stored resume
+            str: The unique ID assigned to the stored resume.
         """
         try:
-            # Generate a unique ID for this resume
             resume_id = str(uuid.uuid4())
             
-            # Create metadata
             if metadata is None:
                 metadata = {}
             
+            # Update metadata with additional resume details.
             metadata.update({
                 "resume_id": resume_id,
                 "file_name": file_name,
                 "source": "user_upload"
             })
             
-            # Split text into chunks
             texts = [resume_text]
             metadatas = [metadata]
             
-            # Create document chunks - handle exceptions that might occur during embedding
             try:
+                # Create document chunks from the resume text.
                 chunks = self.text_splitter.create_documents(
                     texts=texts,
                     metadatas=metadatas
                 )
             except Exception as e:
                 print(f"Error creating document chunks: {str(e)}")
-                # Create documents manually if needed
+                # Fallback: Create documents manually.
                 chunks = [Document(page_content=text, metadata=meta) for text, meta in zip(texts, metadatas)]
             
-            # Add document chunks to vector store
             try:
+                # Add the document chunks to the vector store.
                 self.vector_store.add_documents(chunks)
                 print(f"Stored resume with ID {resume_id} in vector database")
                 return resume_id
             except Exception as e:
                 print(f"Error adding documents to vector store: {str(e)}")
-                # Try a more direct approach if needed
                 try:
-                    # Manually create embeddings and upsert
+                    # Fallback storage method; process each chunk manually.
                     for chunk in chunks:
                         print(f"Manually processing chunk: {len(chunk.page_content)} chars")
-                    
                     print(f"Fallback storage completed for resume ID {resume_id}")
                     return resume_id
                 except Exception as e2:
@@ -170,16 +188,18 @@ class ResumeProcessor:
     
     async def analyze_resume(self, resume_text: str) -> Dict[str, Any]:
         """
-        Analyze resume text using GPT-4o Mini
+        Analyze a resume using GPT-4o Mini to extract key insights.
+        
+        Generates a JSON output that includes a summary of the candidate's profile,
+        a list of skills, suggestions for improving the resume, and recommended job positions.
         
         Args:
-            resume_text: Text extracted from resume
+            resume_text (str): The resume text.
             
         Returns:
-            Dictionary containing resume analysis
+            Dict[str, Any]: The JSON output containing the analysis.
         """
         try:
-            # Set up messages for LangChain
             messages = [
                 SystemMessage(content=(
                     "You are an expert resume analyzer and career advisor. "
@@ -194,10 +214,7 @@ class ResumeProcessor:
                 HumanMessage(content=resume_text)
             ]
             
-            # Use LangChain ChatOpenAI with JSON response format
             response = await json_llm.ainvoke(messages)
-            
-            # Parse and return JSON response
             analysis_str = response.content
             analysis = json.loads(analysis_str)
             return analysis
@@ -208,16 +225,18 @@ class ResumeProcessor:
     
     async def extract_job_preferences(self, resume_text: str) -> List[str]:
         """
-        Extract job preferences and potential search queries from resume
+        Extract job preferences and possible search queries from the resume.
+        
+        Uses a language model prompt to generate a list of job search queries tailored
+        to the candidate's skills, experience, and career interests.
         
         Args:
-            resume_text: Text extracted from resume
+            resume_text (str): The resume text.
             
         Returns:
-            List of potential job search queries based on resume
+            List[str]: A list of job search queries based on the resume.
         """
         try:
-            # Set up messages for LangChain
             messages = [
                 SystemMessage(content=(
                     "You are an expert career advisor. Based on the resume provided, "
@@ -229,10 +248,7 @@ class ResumeProcessor:
                 HumanMessage(content=resume_text)
             ]
             
-            # Use LangChain ChatOpenAI with JSON response format
             response = await json_llm.ainvoke(messages)
-            
-            # Parse JSON response
             preferences_str = response.content
             preferences = json.loads(preferences_str)
             return preferences
@@ -243,17 +259,22 @@ class ResumeProcessor:
             
     async def match_resume_to_job(self, resume_text: str, job_description: str) -> Dict[str, Any]:
         """
-        Match resume to job description and provide analysis
+        Match a candidate's resume to a job description and evaluate the fit.
+        
+        Compares the resume against the job description and outputs a JSON object with:
+            - matchScore: A score from 0-100 indicating the match quality.
+            - matchingSkills: List of skills that match.
+            - missingSkills: List of skills that are not met.
+            - recommendations: Suggestions for improving the candidacy.
         
         Args:
-            resume_text: Text extracted from resume
-            job_description: Job description text
+            resume_text (str): The candidate's resume text.
+            job_description (str): The job description text.
             
         Returns:
-            Match analysis with score and recommendations
+            Dict[str, Any]: A JSON object containing the match analysis.
         """
         try:
-            # Set up messages for LangChain
             messages = [
                 SystemMessage(content=(
                     "You are an expert recruitment advisor. Compare the resume with the job description "
@@ -265,10 +286,7 @@ class ResumeProcessor:
                 HumanMessage(content=f"Resume:\n{resume_text}\n\nJob Description:\n{job_description}")
             ]
             
-            # Use LangChain ChatOpenAI with JSON response format
             response = await json_llm.ainvoke(messages)
-            
-            # Parse JSON response
             analysis_str = response.content
             analysis = json.loads(analysis_str)
             return analysis

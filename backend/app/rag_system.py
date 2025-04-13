@@ -1,3 +1,18 @@
+"""
+Module: rag_system.py
+---------------------
+This module implements a Retrieval-Augmented Generation (RAG) system for job offers using
+Pinecone as a vector store. It loads job offer data from CSV files, processes each row into
+a Document, ingests the resulting document chunks into the vector database, and then enables
+a semantic similarity search to retrieve relevant job offers.
+
+Key Components:
+    - Loading and processing job offer data from CSV.
+    - Splitting long job descriptions into manageable chunks.
+    - Ingesting document chunks into a Pinecone vector store.
+    - Performing a similarity search based solely on the input query or resume text.
+"""
+
 import os
 import re
 import pandas as pd
@@ -8,43 +23,55 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_pinecone import PineconeVectorStore
-# Load environment variables
+
+# Load environment variables from the .env file.
 load_dotenv()
 
-# Initialize OpenAI embeddings
+# Initialize OpenAI embeddings using a lightweight embedding model.
 embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 
-# Initialize Pinecone
+# Initialize Pinecone with the API key provided in the environment.
 pc = pinecone.Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 
 class JobOfferRAG:
     """
-    RAG system for job offers using Pinecone as vector store
+    A domain-agnostic RAG system for job offers using Pinecone as the vector store.
+
+    This class handles:
+      - Loading and processing job offer data from a CSV file.
+      - Splitting the job offer texts into chunks using a recursive text splitter.
+      - Ingesting these chunks into a Pinecone vector store.
+      - Performing a semantic similarity search based solely on the query or resume text,
+        leveraging the underlying embeddings.
+
+    Attributes:
+        INDEX_NAME (str): The name of the Pinecone index that stores job offers.
+        text_splitter (RecursiveCharacterTextSplitter): Used to split job offer texts into chunks.
+        vector_store (PineconeVectorStore): Interface for adding documents and performing similarity searches.
     """
     INDEX_NAME = "job-offers"
     
     def __init__(self):
-        """Initialize the RAG system"""
+        """Initialize the RAG system by setting up the text splitter and vector store."""
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=100,
             separators=["\n\n", "\n", ". ", ", ", " ", ""]
         )
         
-        # Get list of indexes
+        # Get existing index names from Pinecone.
         index_list = [index.name for index in pc.list_indexes()]
         
-        # Create Pinecone index if it doesn't exist
+        # Create the index if it does not exist.
         if self.INDEX_NAME not in index_list:
             try:
                 pc.create_index(
                     name=self.INDEX_NAME,
-                    dimension=1536,  # dimension for text-embedding-3-small
+                    dimension=1536,  # Dimension for the "text-embedding-3-small" model.
                     metric="cosine"
                 )
             except Exception as e:
                 print(f"Error creating index: {str(e)}")
-                # Try again without spec if it fails
                 print("Retrying with default settings...")
                 pc.create_index(
                     name=self.INDEX_NAME,
@@ -52,7 +79,7 @@ class JobOfferRAG:
                     metric="cosine"
                 )
         
-        # Initialize vector store
+        # Initialize the vector store with the created or existing index.
         index = pc.Index(self.INDEX_NAME)
         self.vector_store = PineconeVectorStore(
             index=index,
@@ -61,28 +88,32 @@ class JobOfferRAG:
     
     def load_and_process_job_data(self, csv_path: str) -> List[Document]:
         """
-        Load job offers from CSV and convert to Documents
+        Load job offers from a CSV file and convert each row into a Document object.
+        
+        The CSV is expected to have columns such as:
+          title, company, location, contract_type, posted_date, education_level, 
+          skills, languages, salary_range, description, and url.
         
         Args:
-            csv_path: Path to the CSV file containing job offers
-            
-        Returns:
-            List of Document objects
-        """
-        # Read CSV file
-        df = pd.read_csv(csv_path)
+            csv_path (str): Path to the CSV file containing job offers.
         
-        # Process each job offer row
+        Returns:
+            List[Document]: A list of Document objects representing the job offers.
+        """
+        # Read CSV file into a DataFrame.
+        df = pd.read_csv(csv_path)
         documents = []
+        
+        # Process each row from the CSV.
         for _, row in df.iterrows():
-            # Handle NaN values and clean data
+            # Replace NaN values with empty strings.
             clean_row = {k: ('' if pd.isna(v) else str(v)) for k, v in row.items()}
             
-            # Skip rows with missing essential information
+            # Skip rows missing essential information like title or company.
             if not clean_row.get('title') or not clean_row.get('company'):
                 continue
             
-            # Create structured content from row data
+            # Create a structured multi-line string with job offer details.
             content = f"""
             Title: {clean_row.get('title', '')}
             Company: {clean_row.get('company', '')}
@@ -100,7 +131,7 @@ class JobOfferRAG:
             URL: {clean_row.get('url', '')}
             """
             
-            # Create metadata (cleaning any NaN values)
+            # Create metadata with selected fields.
             metadata = {
                 "title": clean_row.get('title', ''),
                 "company": clean_row.get('company', ''),
@@ -111,7 +142,7 @@ class JobOfferRAG:
                 "url": clean_row.get('url', '')
             }
             
-            # Create Document object
+            # Create and append a Document object.
             doc = Document(page_content=content, metadata=metadata)
             documents.append(doc)
         
@@ -119,142 +150,56 @@ class JobOfferRAG:
     
     def ingest_documents(self, documents: List[Document]) -> None:
         """
-        Split documents into chunks and add to vector store
+        Split the provided documents into smaller text chunks and ingest them into the vector store.
         
         Args:
-            documents: List of Document objects to ingest
+            documents (List[Document]): List of Document objects to ingest.
         """
-        # Split documents into chunks
         chunks = self.text_splitter.split_documents(documents)
-        
-        # Add to vector store
         self.vector_store.add_documents(chunks)
-        
         print(f"Ingested {len(chunks)} chunks from {len(documents)} job offers")
     
     def search_similar_jobs(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
         """
-        Search for similar job offers based on query
+        Perform a similarity search for job offers based solely on the given query.
+        
+        This function relies on the semantic similarity provided by the vector store,
+        returning job offers that are most similar to the input query.
         
         Args:
-            query: Search query
-            k: Number of results to return
-            
+            query (str): The search query.
+            k (int): The number of results to return (default is 5).
+        
         Returns:
-            List of similar job offers with metadata
+            List[Dict[str, Any]]: A list of job offer results with associated metadata and scores.
         """
-        # Check if it's a domain-specific search (like finance)
-        finance_keywords = ['finance', 'financial', 'banking', 'investment', 'accounting', 'trader', 'analyst']
-        is_finance_query = any(keyword in query.lower() for keyword in finance_keywords)
-        
-        # Boost the search results if it's finance-related
-        search_k = k * 2 if is_finance_query else k
-        
-        # Search vector store
-        results = self.vector_store.similarity_search_with_score(query, k=search_k)
-        
-        # Filter and format results
+        results = self.vector_store.similarity_search_with_score(query, k=k)
         formatted_results = []
+        
+        # Format the results by checking that content exists.
         for doc, score in results:
-            # Skip empty content
             if not doc.page_content.strip():
                 continue
-                
-            # For finance queries, prioritize finance-related jobs
-            if is_finance_query:
-                title = doc.metadata.get('title', '').lower()
-                content = doc.page_content.lower()
-                is_finance_job = any(keyword in title or keyword in content for keyword in finance_keywords)
-                
-                # If it's not a finance job and we have enough results, skip it
-                if not is_finance_job and len(formatted_results) >= k:
-                    continue
-            
             formatted_results.append({
                 "content": doc.page_content,
                 "metadata": doc.metadata,
                 "score": score
             })
         
-        # Limit to k results
         return formatted_results[:k]
     
     def find_jobs_for_resume(self, resume_text: str, k: int = 5) -> List[Dict[str, Any]]:
         """
-        Find suitable job offers based on resume text
+        Find suitable job offers based on a candidate's resume text.
+        
+        The function directly uses the resume text as the query, allowing the underlying
+        vector store to retrieve semantically similar job offers.
         
         Args:
-            resume_text: Text extracted from resume
-            k: Number of results to return
-            
+            resume_text (str): The text extracted from the candidate's resume.
+            k (int): The number of job offers to return (default is 5).
+        
         Returns:
-            List of job offers matching resume
+            List[Dict[str, Any]]: A list of job offers matching the resume.
         """
-        # Extract key terms from resume to enhance search
-        key_terms = []
-        
-        # Check for finance-related terms
-        finance_terms = ['finance', 'financial', 'banking', 'investment', 'accounting', 
-                         'trader', 'analyst', 'budget', 'treasury', 'audit']
-        
-        for term in finance_terms:
-            if term in resume_text.lower():
-                key_terms.append(term)
-        
-        # Create enhanced query using key terms
-        if key_terms:
-            enhanced_query = f"{' '.join(key_terms)} {resume_text[:1000]}"
-            return self.search_similar_jobs(enhanced_query, k=k)
-        else:
-            # Use resume text as query if no key terms found
-            return self.search_similar_jobs(resume_text[:1000], k=k)
-    
-    def evaluate_rag_performance(self, test_queries: List[str]) -> Dict[str, Any]:
-        """
-        Evaluate RAG system performance using test queries
-        
-        Args:
-            test_queries: List of test queries
-            
-        Returns:
-            Performance metrics
-        """
-        results = {}
-        
-        # Measure average retrieval time and relevance scores
-        total_time = 0
-        total_scores = 0
-        query_results = []
-        
-        for query in test_queries:
-            # Search for similar jobs
-            import time
-            start_time = time.time()
-            search_results = self.search_similar_jobs(query, k=3)
-            end_time = time.time()
-            
-            # Calculate metrics
-            query_time = end_time - start_time
-            avg_score = sum(result["score"] for result in search_results) / len(search_results) if search_results else 0
-            
-            total_time += query_time
-            total_scores += avg_score
-            
-            query_results.append({
-                "query": query,
-                "time": query_time,
-                "avg_score": avg_score,
-                "results": search_results
-            })
-        
-        # Calculate overall metrics
-        avg_time = total_time / len(test_queries) if test_queries else 0
-        avg_score = total_scores / len(test_queries) if test_queries else 0
-        
-        results = {
-            "average_time": avg_time,
-            "average_score": avg_score,
-            "query_results": query_results
-        }
-        
-        return results
+        return self.search_similar_jobs(resume_text, k=k)
