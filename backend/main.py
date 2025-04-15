@@ -34,7 +34,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
-import os, json, uuid, re, time, asyncio, aiohttp, logging
+import os, json, uuid, re, time, asyncio, aiohttp, logging, re
 from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 import pinecone
@@ -231,6 +231,9 @@ async def chat(message: ChatMessage):
                 user_input=message.content,
                 chat_history=chat_history
             )
+        
+        # Remove all asterisks from the generated response
+        response_content = re.sub(r'\*', '', response_content)
         
         # Append current interaction to session history.
         chat_history.append({"role": "user", "content": message.content})
