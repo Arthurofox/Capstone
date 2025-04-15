@@ -22,8 +22,7 @@ The API provides endpoints for:
     - Administrative operations for data ingestion and cleanup.
     - Voice assistant session initialization for real-time interactions.
     
-Author: [Your Name]
-Date: [Current Date]
+Author: [Arthur Savary]
 """
 
 # =============================================================================
