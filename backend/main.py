@@ -145,49 +145,7 @@ class SessionUpdateRequest(BaseModel):
     session_id: str
     resume_data: Optional[Dict[str, Any]] = None
 
-# =============================================================================
-# Helper Function: Format Job Search Results
-# =============================================================================
 
-def format_job_results(results):
-    """
-    Formats job search results into a user-friendly string.
-    
-    Extracts key details such as job title, company, location, and a snippet from the description.
-    If no details can be extracted or results are empty, returns an appropriate message.
-    """
-    if not results:
-        return "I couldn't find any matching job listings at the moment. Please try a different search term."
-    response = "Here are some job recommendations based on your request:\n\n"
-    for i, result in enumerate(results, 1):
-        content = result.get("content", "").strip()
-        if not content:
-            continue
-        title_match = re.search(r"Title:\s(.+?)(?:\n|$)", content)
-        company_match = re.search(r"Company:\s(.+?)(?:\n|$)", content)
-        location_match = re.search(r"Location:\s(.+?)(?:\n|$)", content)
-        title = title_match.group(1).strip() if title_match else result.get("metadata", {}).get("title", "")
-        company = company_match.group(1).strip() if company_match else result.get("metadata", {}).get("company", "")
-        location = location_match.group(1).strip() if location_match else result.get("metadata", {}).get("location", "")
-        description = ""
-        desc_start = content.find("Description:")
-        if desc_start != -1:
-            desc_text = content[desc_start + len("Description:"):].strip()
-            description = desc_text.split("\n\n")[0].strip()
-        if not title and not company:
-            continue
-        response += f"{i}. {title}\n"
-        if company and company != "N/A":
-            response += f"Company: {company}\n"
-        if location and location != "N/A":
-            response += f"Location: {location}\n"
-        if description:
-            description_snippet = description[:150] + "..." if len(description) > 150 else description
-            response += f"Description: {description_snippet}\n"
-        response += "\n"
-    if response == "Here are some job recommendations based on your request:\n\n":
-        response = "I found some job listings, but couldn't extract their details properly."
-    return response
 
 # =============================================================================
 # API Endpoints
